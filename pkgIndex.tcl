@@ -19,6 +19,7 @@ if {$::tcl_platform(platform) != "unix"} {
     if {[lsearch [package names] IxiaBps] != -1} {
         return
     }
-} 
-package ifneeded IxiaBps 1.0 [list source [file join $dir IxiaBps.tcl]]
+}
+lappend auto_path C:/Ixia/Libs/Bps/bpsh-win32.vfs/lib
+package ifneeded IxiaBps 1.0 [list source [file join $dir IxiaBpsTester.tcl]]
 

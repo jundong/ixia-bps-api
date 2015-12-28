@@ -1,56 +1,3 @@
-package require Itcl
-package require registry
-namespace import itcl::*
-
-
-set Debug 0
-proc Deputs { value } {
-   global Debug
-   global currDir
-   global logfile_name
-   set timeVal  [ clock format [ clock seconds ] -format %T ]
-   set clickVal [ clock clicks ]
-   if { $Debug } {
-		puts "\[<IXIA>TIME:$timeVal\]$value"
-		set logIO [open $logfile_name a+]
-		puts $logIO "\[<IXIA>TIME:$timeVal\]$value"
-		close $logIO
-   }
-}
-set DebugCmd 1
-proc DeputsCMD { value { log 1 } } {
-	global DebugCmd
-	global currDir
-	global logfile_name
-	set timeVal  [ clock format [ clock seconds ] -format %T ]
-	set clickVal [ clock clicks ]
-	if { $DebugCmd } {
-		if { $log } {
-			set logIO [open $logfile_name a+]
-			puts $logIO "\[<IXIACMD>TIME:$timeVal\]$value"
-			close $logIO
-		} else {
-			puts "\[<IXIACMD>TIME:$timeVal\]$value"
-		}
-	}
-}
-proc IxDebugOn { } {
-   global Debug
-   set Debug 1
-}
-proc IxDebugOff { } {
-   global Debug
-   set Debug 0
-}
-proc IxDebugCmdOn { } {
-   global DebugCmd
-   set DebugCmd 1
-}
-proc IxDebugCmdOff { } {
-   global DebugCmd
-   set DebugCmd 0
-}
-
 #==================================================
 # º¯ÊýÃû³Æ:                                                         
 #    ixConvertAllToLowerCase                                                        
@@ -871,4 +818,12 @@ proc GetResultFromReturn { stats } {
 	} else {
 		return 0
 	}
+}
+
+proc NamespaceDefine { name predef } {
+    if { [ regexp {^:+} $name ] == 1 } {
+        return $name
+    } else {
+        return ${predef}::${name}
+    }
 }

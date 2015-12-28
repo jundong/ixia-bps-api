@@ -5,8 +5,9 @@
 
 # Version 1.0
 
-namespace eval IXIA::Logger {
-    namespace export *    
+namespace eval IXIA {
+    namespace export *
+    
     class Logger {
         private variable IOhandle
         private variable loggerType

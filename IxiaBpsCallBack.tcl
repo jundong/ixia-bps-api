@@ -6,7 +6,8 @@ exec tclsh "$0" ${1+"$@"}
 namespace eval IXIA {
     namespace export *
     
-    proc cbSessionClose {} {
+    proc cbSessionClose { args } {
+        puts "cbSessionClose: $args"
         exit
     }
     
@@ -29,15 +30,27 @@ namespace eval IXIA {
         }
     }
     
-    proc cbTestProgress {} {
-        
+    proc cbTestProgress { args } {
+        puts "*************$args*************"
+        #set IXIA::rtProcess($name) $process
     }
     
-    proc cbRunTimeStats { args } {
-        set ::stats [lindex $args 1]
+    proc cbRunTimeStats { name stats } {
+        set IXIA::rtStats($name) $stats
+        puts "============================"
+        dict for { var val } $stats {
+            puts "$var: $val"
+        }
+        puts "============================"
     }
     
-    proc cbAsyncRunTest {} {
-        
+    proc cbAsyncRunTest { args } {
+        puts "cbAsyncRunTest: $args"
+        puts $args
+    }
+    
+    proc cbAsyncStopTest { args } {
+        puts "cbAsyncStopTest: $args"
+        puts $args
     }
 }
