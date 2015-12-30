@@ -372,12 +372,12 @@ proc IsInt {value} {
 	}
 }
 
-proc List2Str { value } {
-	set retStr ""
-	foreach item $value {
-	set retStr $retStr$item
-	}
-	return $retStr
+proc List2Str { value { sep " " } } {
+    set retStr ""
+    foreach item $value {
+        set retStr $retStr$item$sep
+    }
+    return $retStr
 }
 
 proc IsHex {value} {

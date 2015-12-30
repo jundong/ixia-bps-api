@@ -34,6 +34,7 @@ namespace eval IXIA {
         protected variable _lteTests
         protected variable _lawfulInterceptTests
         protected variable _loadProfiles
+        protected variable _appProfiles
         protected variable _multiboxTests
         protected variable _multicastTests
         protected variable _neighborhoods
@@ -73,9 +74,15 @@ namespace eval IXIA {
         public method createTestSeries { name args } {}
         public method createLoadProfile { name args } {}
         public method createNetwork { name args } {}
+        public method createAppProfile { name args } {}
+        public method createSuperflow { name args } {}
+        public method createComponent { testName componentName componentType args } {}
         
         public method configure { name args } {}
+        public method configurePhase { name action index args } {}
+        public method configureSuperflow { name action type parameters args } {}
         public method configureComponent { testName componentName args } {}
+        public method configureAppProfile { appProfileName superFlowName action args } {}
         public method save { name args } {}
         
         public method importTest { name args } {}
@@ -90,32 +97,64 @@ namespace eval IXIA {
         public method getChassis {} { return $_chassis }
         public method getConnection {} { return IXIA::Tester::$_connection }
         public method getTest { name } {
+            set testHandle ""
             if { [ catch {
-                if { [info exists _tests($name) ] } {
-                    return $_tests($name)
+                if { [ info exists _tests($name) ] } {
+                    set testHandle $_tests($name)
                 }
             } err ] } {
                 Deputs "No test $name found"
+                error "No test $name found"
             }
+            return $testHandle
         }
         public method getTestSeries { name } {
+            et testSeriesHandle ""
             if { [ catch {
                 if { [info exists _testSeries($name) ] } {
-                    return $_testSeries($name)
+                    set testSeriesHandle $_testSeries($name)
                 }
             } err ] } {
                 Deputs "No test series $name found"
+                error "No test series $name found"
             }
+            return $testSeriesHandle
         }
         public method getLoadProfile { name } {
+            set loadProfileHandle ""
             if { [ catch {
                 if { [info exists _loadProfiles($name) ] } {
-                    return $_loadProfiles($name)
+                    set loadProfileHandle $_loadProfiles($name)
                 }
             } err ] } {
                 Deputs "No load profile $name found"
+                error "No load profile $name found"
             }
-            return ""
+            return $loadProfileHandle
+        }
+        public method getAppProfile { name } {
+            set appProfileHandle ""
+            if { [ catch {
+                if { [info exists _appProfiles($name) ] } {
+                    set appProfileHandle $_appProfiles($name)
+                }
+            } err ] } {
+                Deputs "No app profile $name found"
+                error "No app profile $name found"
+            }
+            return $appProfileHandle
+        }
+        public method getSuperflow { name } {
+            set superflowHandle ""
+            if { [ catch {
+                if { [info exists _superflows($name) ] } {
+                    set superflowHandle $_superflows($name)
+                }
+            } err ] } {
+                Deputs "No app profile $name found"
+                error "No app profile $name found"
+            }
+            return $superflowHandle
         }
     }
 
@@ -140,25 +179,29 @@ namespace eval IXIA {
         
         set handle ""
         if { [ catch {
-            if { ![ info exists _loadProfiles($name) ] } {
-                set handle $_loadProfiles($name)
-            } elseif { ![ info exists _tests($name) ] } {
+            if { [ info exists _tests($name) ] } {
                 set handle $_tests($name)
-            } elseif { ![ info exists _testSeries($name) ] } {
+            } elseif { [ info exists _testSeries($name) ] } {
                 set handle $_testSeries($name)
-            } elseif { ![ info exists _networks($name) ] } {
+            } elseif { [ info exists _networks($name) ] } {
                 set handle $_networks($name)
+            } elseif { [ info exists _loadProfiles($name) ] } {
+                set handle $_loadProfiles($name)
             }
             
             if { $handle != "" } {
                 set cmd "$handle configure $args"
                 Deputs $cmd
                 eval $cmd
+                
+                set cmd "$handle save"
+                Deputs $cmd
+                eval $cmd
             } else {
-                Deputs "No resource with name: $name"
+                Deputs "No object found with name: $name"
             }
         } err ] } {
-            Deputs "----- Failed to configure resource $name: $err -----"
+            Deputs "----- Failed to configure object $name: $err -----"
             return [GetErrorReturnHeader $err]
         }
         return [GetStandardReturnHeader]
@@ -168,42 +211,312 @@ namespace eval IXIA {
     # Name: configureComponent - Configure component object
     #--
     # Parameters:
-    #       name: The name of created object to configure, mandatory parameter
-    #       args:
-    #           ........
+    #       testName: The name of test, mandatory parameter
+    #       componentName: The name of component in above test, mandatory parameter
+    #       args: Args include several types of component, so user must give the matched parameters list. Below list the load options
+    #           -rampDist.down 00:00:15
+    #           -rampDist.downBehavior full, valid values are full, half and rst
+    #           -rampDist.steady 00:00:60
+    #           -rampDist.steadyBehavior cycle, valid values are cycle and hold 
+    #           -rampDist.up 00:00:01
+    #           -rampDist.upBehavior full, valid values are full, full + data,
+    #                   full + data + close, half, data flood and syn
+    #           -rampDist.synRetryMode obey_retry
+    #
+    #           In StairStep load profile mode, we still can configure below options
+    #           -rampUpProfile.increment 1
+    #           -rampUpProfile.interval 00:00:01 00:00:01
+    #           -rampUpProfile.max 1
+    #           -rampUpProfile.min 1
+    #           -rampUpProfile.type calculated
     # Return:
     #        0 if got success
     #        raise error if failed
     #--
     body Tester::configureComponent { testName componentName args } {
-        set tag "body Tester::configure $name $args [info script]"
+        set tag "body Tester::configureComponent $testName $componentName $args [info script]"
         Deputs "----- TAG: $tag -----"
         
-        if { ![ info exists name ] } {
-            error "configure name must be configured"
+        if { ![ info exists componentName ] } {
+            error "configureComponent componentName must be configured"
         }
         
-        set handle ""
+        if { ![ info exists testName ] } {
+            error "configureComponent testName must be configured"
+        }
+
         if { [ catch {
-            if { ![ info exists _loadProfiles($name) ] } {
-                set handle $_loadProfiles($name)
-            } elseif { ![ info exists _tests($name) ] } {
-                set handle $_tests($name)
-            } elseif { ![ info exists _testSeries($name) ] } {
-                set handle $_testSeries($name)
-            } elseif { ![ info exists _networks($name) ] } {
-                set handle $_networks($name)
+            if { [ info exists _tests($testName) ] } {
+                set handle $_tests($testName)
+                set cmd ""
+                dict for { key value } [ $handle getComponents ] {
+                    if { [ string tolower [ $value cget -name ] ] == [ string tolower $componentName ] ||
+                        [ string tolower [ $value cget -name ] ] == [ string tolower ::$componentName ]} {
+                        set cmd "$value configure $args"
+                        Deputs $cmd
+                        eval $cmd
+                    }
+                }
+                
+                if { $cmd == "" } {
+                    Deputs "No component $componentName found"
+                }
+            } else {
+                Deputs "No test $testName found"
             }
-            
-            if { $handle != "" } {
-                set cmd "$handle configure $args"
+        } err ] } {
+            Deputs "----- Failed to configure component $componentName: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: configureComponent - Configure component object
+    #--
+    # Parameters:
+    #       appProfileName: The name of application profile, mandatory parameter
+    #       superFlowName: The name of super flow, mandatory parameter
+    #       action: The action to configure the super flow in app profile, valid value are add, modify and remove, mandatory parameter 
+    #       args: 
+    #           -weight: Super flow weight, default value is 100
+    #           -seed: Random seed, default value is 100
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::configureAppProfile { appProfileName superFlowName action args } {
+        set tag "body Tester::configureAppProfile $appProfileName $superFlowName $action $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists appProfileName ] } {
+            error "configureAppProfile appProfileName must be configured"
+        }
+        
+        if { ![ info exists superFlowName ] } {
+            error "configureAppProfile superFlowName must be configured"
+        }
+
+        if { ![ info exists action ] } {
+            error "configureAppProfile action must be configured"
+        }
+        
+        set weight 100
+        foreach { key value } $args {
+            set key [string tolower $key]
+            Deputs "Key :$key \tValue :$value"
+            switch -exact -- $key {
+                -weight {
+                    set weight $value
+                }
+                -seed {
+                    set seed $value
+                }
+            }
+        }
+        
+        if { [ catch {
+            if { [ info exists _appProfiles($appProfileName) ] } {
+                set handle $_appProfiles($appProfileName)
+                set cmd ""
+                if { [ string tolower $action ] == "add" } {
+                    if { ![ info exists seed ] } {
+                        set seed 100
+                    }
+                    set cmd "$handle addSuperflow $superFlowName $weight $seed"
+                } elseif { [ string tolower $action ] == "modify" } {
+                    if { ![ info exists seed ] } {
+                        set cmd "$handle modifySuperflow $superFlowName $weight"
+                    } else {
+                        set cmd "$handle modifySuperflow $superFlowName $weight $seed"
+                    }
+                } elseif { [ string tolower $action ] == "remove" } {
+                    set cmd "$handle removeSuperflow $superFlowName"
+                } else {
+                    Deputs "Unknown action $action found"
+                    error "Unknown action $action found"
+                }
                 Deputs $cmd
                 eval $cmd
             } else {
-                Deputs "No resource with name: $name"
+                Deputs "No app profile $appProfileName found"
+                error "No app profile $appProfileName found"
             }
         } err ] } {
-            Deputs "----- Failed to configure resource $name: $err -----"
+            Deputs "----- Failed to configure app profile $appProfileName: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: configureSuperflow - Configure super flow
+    #--
+    # Parameters:
+    #       name: The name of super flow, mandatory parameter
+    #       action: The action for super flow resources, valid values are add, modify, remove and unset, mandatory parameter
+    #       type: The configure resource type, valid values are action, maction(Match action), flow and host, mandatory parameter
+    #       parameters: Mandatory parameters for action operation, eg [list flowid source name], mandatory parameter
+    #       args: Args for action operation
+    #           For add:
+    #               
+    #           For modify:
+    #
+    #           For remove:
+    #
+    #           For unset:
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::configureSuperflow { name action type parameters args } {
+        set tag "body Tester::configureSuperflow $name $action $type $parameters $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists name ] } {
+            error "configureSuperflow name must be configured"
+        }
+        
+        if { ![ info exists action ] } {
+            error "configureComponent action must be configured"
+        }
+
+        if { ![ info exists type ] } {
+            error "configureSuperflow type must be configured"
+        }
+        
+        if { ![ info exists parameters ] } {
+            error "configureComponent parameters must be configured"
+        }
+        
+        if { [ catch {
+            if { [ info exists _superflows($name) ] } {
+                set handle $_superflows($name)
+                set cmd ""
+                if { [ string tolower $action ] == "add" } {
+                    if { [ string tolower $type ] == "action" } {
+                        set cmd "$handle addAction [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                    } elseif { [ string tolower $type ] == "maction" } {
+                        set cmd "$handle addMatchAction [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] [ lindex $paramters 3 ] [ lindex $paramters 4 ] $args"
+                    } elseif { [ string tolower $type ] == "flow" } {
+                        set cmd "$handle addFlow [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                    } elseif { [ string tolower $type ] == "host" } {
+                        set cmd "$handle addHost [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                    } else {
+                        Deputs "Unknown resource type $type"
+                        error "Unknown resource type $type"
+                    }
+                } elseif { [ string tolower $action ] == "modify" } {
+                    if { [ string tolower $type ] == "action" } {
+                        set cmd "$handle modifyAction [ lindex $paramters 0 ] $args"
+                    } elseif { [ string tolower $type ] == "maction" } {
+                        set cmd "$handle modifyMatchAction [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                    } elseif { [ string tolower $type ] == "flow" } {
+                        set cmd "$handle modifyFlow [ lindex $paramters 0 ] $args"
+                    } elseif { [ string tolower $type ] == "host" } {
+                        set cmd "$handle modifyHost [ lindex $paramters 0 ] $args"
+                    } else {
+                        Deputs "Unknown resource type $type"
+                        error "Unknown resource type $type"
+                    }
+                } elseif { [ string tolower $action ] == "remove" } {
+                    if { [ string tolower $type ] == "action" } {
+                        set cmd "$handle removeAction [ lindex $paramters 0 ] $args"
+                    } elseif { [ string tolower $type ] == "maction" } {
+                        set cmd "$handle removeMatchAction [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                    } elseif { [ string tolower $type ] == "flow" } {
+                        set cmd "$handle removeFlow [ lindex $paramters 0 ] $args"
+                    } elseif { [ string tolower $type ] == "host" } {
+                        set cmd "$handle removeHost [ lindex $paramters 0 ] $args"
+                    } else {
+                        Deputs "Unknown resource type $type"
+                        error "Unknown resource type $type"
+                    }
+                } elseif { [ string tolower $action ] == "unset" } {
+                    if { [ string tolower $type ] == "action" } {
+                        set cmd "$handle unsetActionParameter [ lindex $paramters 0 ] $args"
+                    } elseif { [ string tolower $type ] == "maction" } {
+                        set cmd "$handle unsetMatchActionParameter [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                    } elseif { [ string tolower $type ] == "flow" } {
+                        set cmd "$handle unsetFlowParameter [ lindex $paramters 0 ] $args"
+                    } else {
+                        Deputs "Unknown resource type $type"
+                        error "Unknown resource type $type"
+                    }
+                } else {
+                    Deputs "Unknown action $action"
+                }
+                
+                Deputs $cmd
+                eval $cmd
+            } else {
+                Deputs "No super flow $name found"
+                error "No super flow $name found"
+            }
+        } err ] } {
+            Deputs "----- Failed to configure component $componentName: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: configurePhase - Configure Phase
+    #--
+    # Parameters:
+    #       name: The name of load profile, mandatory parameter
+    #       action: The atction for load phase, valid values are add, modify and remove, mandatory parameter
+    #       index: The index of load phase, mandatory parameter
+    #       args:
+    #           duration 1
+    #           sessions.max 1
+    #           sessions.maxPerSecond 1
+    #           rateDist.min 1
+    #           rateDist.unit mbps
+    #           rateDist.scope per_if
+    #           rampDist.downBehavior full, valid values are full, half and rst
+    #           rampDist.steadyBehavior cycle, valid values are cycle and hold 
+    #           rampDist.upBehavior full, valid values are full, full + data,
+    #                   full + data + close, half, data flood and syn
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::configurePhase { name action index args } {
+        set tag "body Tester::configurePhase $name $action $index $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists name ] } {
+            error "configurePhase name must be configured"
+        }
+
+        if { ![ info exists action ] } {
+            error "configurePhase action must be configured"
+        }
+        
+        if { ![ info exists index ] } {
+            error "configurePhase index must be configured"
+        }
+        
+        if { [ catch {
+            if { [ info exists _loadProfiles($name) ] } {
+                set handle $_loadProfiles($testName)
+                set cmd ""
+                if { [string tolower $action ] == "add" } {
+                    set cmd "$handle addPhase $index $args"
+                } elseif { [string tolower $action ] == "modify" } {
+                    set cmd "$handle modifyPhase $index $args"
+                } elseif { [string tolower $action ] == "remove" } {
+                    set cmd "$handle removePhase $index"
+                } else {
+                    Deputs "Wrong action $action, action must be one of add, modify or remove"
+                    error "Wrong action $action, action must be one of add, modify or remove"
+                }
+            } else {
+                Deputs "No load profile $testName found"
+            }
+        } err ] } {
+            Deputs "----- Failed to configure component $componentName: $err -----"
             return [GetErrorReturnHeader $err]
         }
         return [GetStandardReturnHeader]
@@ -230,13 +543,13 @@ namespace eval IXIA {
         
         set handle ""
         if { [ catch {
-            if { ![ info exists _loadProfiles($name) ] } {
+            if { [ info exists _loadProfiles($name) ] } {
                 set handle $_loadProfiles($name)
-            } elseif { ![ info exists _tests($name) ] } {
+            } elseif { [ info exists _tests($name) ] } {
                 set handle $_tests($name)
-            } elseif { ![ info exists _testSeries($name) ] } {
+            } elseif { [ info exists _testSeries($name) ] } {
                 set handle $_testSeries($name)
-            } elseif { ![ info exists _networks($name) ] } {
+            } elseif { [ info exists _networks($name) ] } {
                 set handle $_networks($name)
             }
             
@@ -278,9 +591,12 @@ namespace eval IXIA {
                 set cmd "$_connection createLoadProfile -name $name $args"
                 Deputs $cmd
                 set _loadProfiles($name) [ eval $cmd ]
-            } 
+                Deputs $_loadProfiles($name)
+            } else {
+                Deputs "Load profile $name has already exists"
+            }
         } err ] } {
-            Deputs "----- Failed to create test $name: $err -----"
+            Deputs "----- Failed to create load profile $name: $err -----"
             return [GetErrorReturnHeader $err]
         }
         return [GetStandardReturnHeader]
@@ -447,7 +763,7 @@ namespace eval IXIA {
                 eval $cmd
                 set cmd "createTest $name -template $name"
                 Deputs $cmd
-                eval $cmd
+                set _tests($name) [ eval $cmd ]
             }
         } err ] } {
             Deputs "----- Failed to export $name: $err -----"
@@ -579,7 +895,7 @@ namespace eval IXIA {
     # Parameters:
     #       name: The name of test to create, mandatory parameter
     #       args:
-    #           ........
+    #           -template: Canned test as a template
     # Return:
     #        0 if got success
     #        raise error if failed
@@ -597,7 +913,9 @@ namespace eval IXIA {
                 set cmd "$_connection createTest -name $name $args"
                 Deputs $cmd
                 set _tests($name) [ eval $cmd ]
-            } 
+            } else {
+                Deputs "Test $name has already exists"
+            }
         } err ] } {
             Deputs "----- Failed to create test $name: $err -----"
             return [GetErrorReturnHeader $err]
@@ -611,7 +929,7 @@ namespace eval IXIA {
     # Parameters:
     #       name: The name of test series to create, mandatory parameter
     #       args:
-    #           ........
+    #           -template: Canned test series as a template
     # Return:
     #        0 if got success
     #        raise error if failed
@@ -629,9 +947,124 @@ namespace eval IXIA {
                 set cmd "$_connection createTestSeries -name $name $args"
                 Deputs $cmd
                 set _testSeries($name) [ eval $cmd ]
-            } 
+            } else {
+                Deputs "Test series $name has already exists"
+            }
         } err ] } {
             Deputs "----- Failed to create test series $name: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: createAppProfile - Create app profile
+    #--
+    # Parameters:
+    #       name: The name of app profile to create, mandatory parameter
+    #       args:
+    #           -template: Canned app profile as a template
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::createAppProfile { name args } {
+        set tag "body Tester::createAppProfile $name $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists name ] } {
+            error "createAppProfile name must be configured"
+        }
+        
+        if { [ catch {
+            if { ![ info exists _appProfiles($name) ] } {
+                set cmd "$_connection createAppProfile -name $name $args"
+                Deputs $cmd
+                set _appProfiles($name) [ eval $cmd ]
+            } else {
+                Deputs "App profile $name has already exists"
+            }
+        } err ] } {
+            Deputs "----- Failed to create app profile $name: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: createSuperflow - Create super flow
+    #--
+    # Parameters:
+    #       name: The name of super flow to create, mandatory parameter
+    #       args:
+    #           -template: Canned app profile as a template
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::createSuperflow { name args } {
+        set tag "body Tester::createSuperflow $name $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists name ] } {
+            error "createSuperflow name must be configured"
+        }
+        
+        if { [ catch {
+            if { ![ info exists _superflows($name) ] } {
+                set cmd "$_connection createSuperflow -name $name $args"
+                Deputs $cmd
+                set _superflows($name) [ eval $cmd ]
+            } else {
+                Deputs "Super flow $name has already exists"
+            }
+        } err ] } {
+            Deputs "----- Failed to create super flow $name: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: createComponent - Create component for a test
+    #--
+    # Parameters:
+    #       testName: The name of test, mandatory parameter
+    #       componentName: The name of component to create, mandatory parameter
+    #       componentType: The type of component, mandatory parameter
+    #       args:
+    #           -template: Canned app profile as a template
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::createComponent { testName componentName componentType args } {
+        set tag "body Tester::createComponent $testName $componentName $componentType $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists testName ] } {
+            error "createComponent testName must be configured"
+        }
+        
+        if { ![ info exists componentName ] } {
+            error "createComponent componentName must be configured"
+        }
+        
+        if { ![ info exists componentType ] } {
+            error "createComponent componentType must be configured"
+        }
+        
+        if { [ catch {
+            if { [ info exists _tests($testName) ] } {
+                set handle $_tests($testName)
+                set cmd "$handle createComponent $componentType $componentName $args"
+                Deputs $cmd
+                eval $cmd
+            } else {
+                Deputs "No test $testName found"
+            }
+        } err ] } {
+            Deputs "----- Failed to create component $componentName: $err -----"
             return [GetErrorReturnHeader $err]
         }
         return [GetStandardReturnHeader]

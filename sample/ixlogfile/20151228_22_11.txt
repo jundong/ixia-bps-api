@@ -1,0 +1,11 @@
+12/28/15 10:11:44 PM INFO: ----- TAG: Tester::constructor 172.16.174.128 admin admin  C:/Ixia/Workspace/ixia-bps-api/sample/bps_tester.tcl ----- 
+12/28/15 10:11:44 PM INFO: bps::connect 172.16.174.128 admin admin  
+12/28/15 10:11:50 PM INFO: bPSConnection0 getChassis 
+12/28/15 10:11:50 PM INFO: ----- TAG: body Tester::createTest MyAutoTestNew -template MyAutoTest1 C:/Ixia/Workspace/ixia-bps-api/sample/bps_tester.tcl ----- 
+12/28/15 10:11:50 PM INFO: bPSConnection0 createTest -name MyAutoTestNew -template MyAutoTest1 
+12/28/15 11:17:49 PM INFO: ----- TAG: body Tester::reservePort { 0 0 } { 0 1 }  C:/Ixia/Workspace/ixia-bps-api/sample/bps_tester.tcl ----- 
+12/28/15 11:17:49 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::chassisClient0 reservePort 0 0  
+12/28/15 11:17:49 PM INFO: ----- Failed to reserve port 0/0: Port 0 is not valid for slot 0 ----- 
+12/28/15 11:17:49 PM INFO: ----- TAG: body Tester::unreservePort { 0 0 } { 0 1 } C:/Ixia/Workspace/ixia-bps-api/sample/bps_tester.tcl ----- 
+12/28/15 11:17:49 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::chassisClient0 unreservePort 0 0 
+12/28/15 11:17:49 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::chassisClient0 unreservePort 0 1 

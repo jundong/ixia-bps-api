@@ -31,8 +31,7 @@ namespace eval IXIA {
     }
     
     proc cbTestProgress { args } {
-        puts "*************$args*************"
-        #set IXIA::rtProcess($name) $process
+        set IXIA::rtProcess($name) $process
     }
     
     proc cbRunTimeStats { name stats } {
