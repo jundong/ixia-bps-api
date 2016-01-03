@@ -39,6 +39,7 @@ namespace eval IXIA {
         protected variable _multicastTests
         protected variable _neighborhoods
         protected variable _networks
+        protected variable _aggStats
         protected variable _rfc2544Tests
         protected variable _resiliencyTests
         protected variable _serverResiliencyTests
@@ -80,16 +81,25 @@ namespace eval IXIA {
         
         public method configure { name args } {}
         public method configurePhase { name action index args } {}
+        public method configureNetwork { name action type parameters args } {}
         public method configureSuperflow { name action type parameters args } {}
         public method configureComponent { testName componentName args } {}
         public method configureAppProfile { appProfileName superFlowName action args } {}
         public method save { name args } {}
+        public method delete { name args } {}
         
         public method importTest { name args } {}
         public method exportTest { name args } {}
         public method exportReport { name args } {}
         
         public method getRtStats { name args } {}
+        public method getAggStats { name args } {}
+        public method getRtProcess { name } {
+            if { [ info exists IXIA::rtProcess($name) ] } {
+                return $IXIA::rtProcess($name)
+            }
+            return [ list ]
+        }
         
         public method reservePort { portlist args } {}
         public method unreservePort { portlist } {}
@@ -156,6 +166,30 @@ namespace eval IXIA {
             }
             return $superflowHandle
         }
+        public method getComponent { name } {
+            set componentHandle ""
+            if { [ catch {
+                if { [info exists _components($name) ] } {
+                    set componentHandle $_components($name)
+                }
+            } err ] } {
+                Deputs "No component $name found"
+                error "No component $name found"
+            }
+            return $componentHandle
+        }
+        public method getNetwork { name } {
+            set networkHandle ""
+            if { [ catch {
+                if { [info exists _networks($name) ] } {
+                    set networkHandle $_networks($name)
+                }
+            } err ] } {
+                Deputs "No network $name found"
+                error "No network $name found"
+            }
+            return $networkHandle
+        }
     }
 
     #--
@@ -187,6 +221,8 @@ namespace eval IXIA {
                 set handle $_networks($name)
             } elseif { [ info exists _loadProfiles($name) ] } {
                 set handle $_loadProfiles($name)
+            } elseif { [ info exists _components($name) ] } {
+                set handle $_components($name)
             }
             
             if { $handle != "" } {
@@ -194,7 +230,7 @@ namespace eval IXIA {
                 Deputs $cmd
                 eval $cmd
                 
-                set cmd "$handle save"
+                set cmd "$handle save -force"
                 Deputs $cmd
                 eval $cmd
             } else {
@@ -211,76 +247,12 @@ namespace eval IXIA {
     # Name: configureComponent - Configure component object
     #--
     # Parameters:
-    #       testName: The name of test, mandatory parameter
-    #       componentName: The name of component in above test, mandatory parameter
-    #       args: Args include several types of component, so user must give the matched parameters list. Below list the load options
-    #           -rampDist.down 00:00:15
-    #           -rampDist.downBehavior full, valid values are full, half and rst
-    #           -rampDist.steady 00:00:60
-    #           -rampDist.steadyBehavior cycle, valid values are cycle and hold 
-    #           -rampDist.up 00:00:01
-    #           -rampDist.upBehavior full, valid values are full, full + data,
-    #                   full + data + close, half, data flood and syn
-    #           -rampDist.synRetryMode obey_retry
-    #
-    #           In StairStep load profile mode, we still can configure below options
-    #           -rampUpProfile.increment 1
-    #           -rampUpProfile.interval 00:00:01 00:00:01
-    #           -rampUpProfile.max 1
-    #           -rampUpProfile.min 1
-    #           -rampUpProfile.type calculated
-    # Return:
-    #        0 if got success
-    #        raise error if failed
-    #--
-    body Tester::configureComponent { testName componentName args } {
-        set tag "body Tester::configureComponent $testName $componentName $args [info script]"
-        Deputs "----- TAG: $tag -----"
-        
-        if { ![ info exists componentName ] } {
-            error "configureComponent componentName must be configured"
-        }
-        
-        if { ![ info exists testName ] } {
-            error "configureComponent testName must be configured"
-        }
-
-        if { [ catch {
-            if { [ info exists _tests($testName) ] } {
-                set handle $_tests($testName)
-                set cmd ""
-                dict for { key value } [ $handle getComponents ] {
-                    if { [ string tolower [ $value cget -name ] ] == [ string tolower $componentName ] ||
-                        [ string tolower [ $value cget -name ] ] == [ string tolower ::$componentName ]} {
-                        set cmd "$value configure $args"
-                        Deputs $cmd
-                        eval $cmd
-                    }
-                }
-                
-                if { $cmd == "" } {
-                    Deputs "No component $componentName found"
-                }
-            } else {
-                Deputs "No test $testName found"
-            }
-        } err ] } {
-            Deputs "----- Failed to configure component $componentName: $err -----"
-            return [GetErrorReturnHeader $err]
-        }
-        return [GetStandardReturnHeader]
-    }
-    
-    #--
-    # Name: configureComponent - Configure component object
-    #--
-    # Parameters:
     #       appProfileName: The name of application profile, mandatory parameter
     #       superFlowName: The name of super flow, mandatory parameter
     #       action: The action to configure the super flow in app profile, valid value are add, modify and remove, mandatory parameter 
     #       args: 
-    #           -weight: Super flow weight, default value is 100
-    #           -seed: Random seed, default value is 100
+    #           -weight: Super flow weight
+    #           -seed: Random seed
     # Return:
     #        0 if got success
     #        raise error if failed
@@ -301,7 +273,6 @@ namespace eval IXIA {
             error "configureAppProfile action must be configured"
         }
         
-        set weight 100
         foreach { key value } $args {
             set key [string tolower $key]
             Deputs "Key :$key \tValue :$value"
@@ -320,15 +291,30 @@ namespace eval IXIA {
                 set handle $_appProfiles($appProfileName)
                 set cmd ""
                 if { [ string tolower $action ] == "add" } {
-                    if { ![ info exists seed ] } {
-                        set seed 100
-                    }
-                    set cmd "$handle addSuperflow $superFlowName $weight $seed"
-                } elseif { [ string tolower $action ] == "modify" } {
-                    if { ![ info exists seed ] } {
-                        set cmd "$handle modifySuperflow $superFlowName $weight"
+                    if { [ info exists weight ] } {
+                        if { [ info exists seed ] } {
+                            set cmd "$handle addSuperflow $superFlowName $weight $seed"
+                        } else {
+                            set cmd "$handle addSuperflow $superFlowName $weight"
+                        }
                     } else {
-                        set cmd "$handle modifySuperflow $superFlowName $weight $seed"
+                        if { [ info exists seed ] } {
+                            set cmd "$handle addSuperflow $superFlowName $seed"
+                        } else {
+                            set cmd "$handle addSuperflow $superFlowName"
+                        }
+                    }
+                } elseif { [ string tolower $action ] == "modify" } {
+                    if { [ info exists weight ] } {
+                        if { [ info exists seed ] } {
+                            set cmd "$handle modifySuperflow $superFlowName $weight $seed"
+                        } else {
+                            set cmd "$handle modifySuperflow $superFlowName $weight"
+                        }
+                    } else {
+                        if { [ info exists seed ] } {
+                            set cmd "$handle modifySuperflow $superFlowName $seed"
+                        } 
                     }
                 } elseif { [ string tolower $action ] == "remove" } {
                     set cmd "$handle removeSuperflow $superFlowName"
@@ -336,6 +322,10 @@ namespace eval IXIA {
                     Deputs "Unknown action $action found"
                     error "Unknown action $action found"
                 }
+                Deputs $cmd
+                eval $cmd
+                
+                set cmd "$handle save -force"
                 Deputs $cmd
                 eval $cmd
             } else {
@@ -378,7 +368,7 @@ namespace eval IXIA {
         }
         
         if { ![ info exists action ] } {
-            error "configureComponent action must be configured"
+            error "configureSuperflow action must be configured"
         }
 
         if { ![ info exists type ] } {
@@ -386,7 +376,7 @@ namespace eval IXIA {
         }
         
         if { ![ info exists parameters ] } {
-            error "configureComponent parameters must be configured"
+            error "configureSuperflow parameters must be configured"
         }
         
         if { [ catch {
@@ -395,50 +385,50 @@ namespace eval IXIA {
                 set cmd ""
                 if { [ string tolower $action ] == "add" } {
                     if { [ string tolower $type ] == "action" } {
-                        set cmd "$handle addAction [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                        set cmd "$handle addAction [ lindex $parameters 0 ] [ lindex $parameters 1 ] [ lindex $parameters 2 ] $args"
                     } elseif { [ string tolower $type ] == "maction" } {
-                        set cmd "$handle addMatchAction [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] [ lindex $paramters 3 ] [ lindex $paramters 4 ] $args"
+                        set cmd "$handle addMatchAction [ lindex $parameters 0 ] [ lindex $parameters 1 ] [ lindex $parameters 2 ] [ lindex $parameters 3 ] [ lindex $parameters 4 ] $args"
                     } elseif { [ string tolower $type ] == "flow" } {
-                        set cmd "$handle addFlow [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                        set cmd "$handle addFlow [ lindex $parameters 0 ] [ lindex $parameters 1 ] [ lindex $parameters 2 ] $args"
                     } elseif { [ string tolower $type ] == "host" } {
-                        set cmd "$handle addHost [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                        set cmd "$handle addHost [ lindex $parameters 0 ] [ lindex $parameters 1 ] [ lindex $parameters 2 ] $args"
                     } else {
                         Deputs "Unknown resource type $type"
                         error "Unknown resource type $type"
                     }
                 } elseif { [ string tolower $action ] == "modify" } {
                     if { [ string tolower $type ] == "action" } {
-                        set cmd "$handle modifyAction [ lindex $paramters 0 ] $args"
+                        set cmd "$handle modifyAction [ lindex $parameters 0 ] $args"
                     } elseif { [ string tolower $type ] == "maction" } {
-                        set cmd "$handle modifyMatchAction [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                        set cmd "$handle modifyMatchAction [ lindex $parameters 0 ] [ lindex $parameters 1 ] [ lindex $parameters 2 ] $args"
                     } elseif { [ string tolower $type ] == "flow" } {
-                        set cmd "$handle modifyFlow [ lindex $paramters 0 ] $args"
+                        set cmd "$handle modifyFlow [ lindex $parameters 0 ] $args"
                     } elseif { [ string tolower $type ] == "host" } {
-                        set cmd "$handle modifyHost [ lindex $paramters 0 ] $args"
+                        set cmd "$handle modifyHost [ lindex $parameters 0 ] $args"
                     } else {
                         Deputs "Unknown resource type $type"
                         error "Unknown resource type $type"
                     }
                 } elseif { [ string tolower $action ] == "remove" } {
                     if { [ string tolower $type ] == "action" } {
-                        set cmd "$handle removeAction [ lindex $paramters 0 ] $args"
+                        set cmd "$handle removeAction [ lindex $parameters 0 ] $args"
                     } elseif { [ string tolower $type ] == "maction" } {
-                        set cmd "$handle removeMatchAction [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                        set cmd "$handle removeMatchAction [ lindex $parameters 0 ] [ lindex $parameters 1 ] [ lindex $parameters 2 ] $args"
                     } elseif { [ string tolower $type ] == "flow" } {
-                        set cmd "$handle removeFlow [ lindex $paramters 0 ] $args"
+                        set cmd "$handle removeFlow [ lindex $parameters 0 ] $args"
                     } elseif { [ string tolower $type ] == "host" } {
-                        set cmd "$handle removeHost [ lindex $paramters 0 ] $args"
+                        set cmd "$handle removeHost [ lindex $parameters 0 ] $args"
                     } else {
                         Deputs "Unknown resource type $type"
                         error "Unknown resource type $type"
                     }
                 } elseif { [ string tolower $action ] == "unset" } {
                     if { [ string tolower $type ] == "action" } {
-                        set cmd "$handle unsetActionParameter [ lindex $paramters 0 ] $args"
+                        set cmd "$handle unsetActionParameter [ lindex $parameters 0 ] $args"
                     } elseif { [ string tolower $type ] == "maction" } {
-                        set cmd "$handle unsetMatchActionParameter [ lindex $paramters 0 ] [ lindex $paramters 1 ] [ lindex $paramters 2 ] $args"
+                        set cmd "$handle unsetMatchActionParameter [ lindex $parameters 0 ] [ lindex $parameters 1 ] [ lindex $parameters 2 ] $args"
                     } elseif { [ string tolower $type ] == "flow" } {
-                        set cmd "$handle unsetFlowParameter [ lindex $paramters 0 ] $args"
+                        set cmd "$handle unsetFlowParameter [ lindex $parameters 0 ] $args"
                     } else {
                         Deputs "Unknown resource type $type"
                         error "Unknown resource type $type"
@@ -449,12 +439,98 @@ namespace eval IXIA {
                 
                 Deputs $cmd
                 eval $cmd
+                
+                set cmd "$handle save -force"
+                Deputs $cmd
+                eval $cmd
             } else {
                 Deputs "No super flow $name found"
                 error "No super flow $name found"
             }
         } err ] } {
-            Deputs "----- Failed to configure component $componentName: $err -----"
+            Deputs "----- Failed to configure superflow $name: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: configureNetwork - Configure network
+    #--
+    # Parameters:
+    #       name: The name of network, mandatory parameter
+    #       action: The action for super flow resources, valid values are config, add and remove, mandatory parameter
+    #       type: The configure resource type, valid values are path, interface, vlan, ip_dhcp_server, ipsec_config..., mandatory parameter
+    #       parameters: Mandatory parameters for action operation, eg [list flowid source name], mandatory parameter
+    #       args: Args for action operation
+    #           For add:
+    #               
+    #           For remove:
+    #
+    #           For config:
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::configureNetwork { name action type parameters args } {
+        set tag "body Tester::configureNetwork $name $action $type $parameters $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists name ] } {
+            error "configureNetwork name must be configured"
+        }
+        
+        if { ![ info exists action ] } {
+            error "configureNetwork action must be configured"
+        }
+
+        if { ![ info exists type ] } {
+            error "configureNetwork type must be configured"
+        }
+        
+        if { ![ info exists parameters ] } {
+            error "configureNetwork parameters must be configured"
+        }
+        
+        if { [ catch {
+            if { [ info exists _networks($name) ] } {
+                set handle $_networks($name)
+                set cmd ""
+                if { [ string tolower $action ] == "add" } {
+                    if { [ string tolower $type ] == "path" } {
+                        set cmd "$handle addPath [ lindex $parameters 0 ] [ lindex $parameters 1 ]"
+                    } else {
+                        set cmd "$handle add $type $args"
+                    }
+                } elseif { [ string tolower $action ] == "config" } {
+                    set element [ $handle get $type [ lindex $parameters 0 ] ]
+                    set cmd "$element configure $args"
+                } elseif { [ string tolower $action ] == "remove" } {
+                    if { [ string tolower $type ] == "path" } {
+                        set cmd "$handle removePath [ lindex $parameters 0 ] [ lindex $parameters 1 ]"
+                    } else {
+                        set cmd "$handle remove $type [ lindex $parameters 0 ]"
+                    }
+                } else {
+                    Deputs "Unknown action $action"
+                }
+                
+                Deputs $cmd
+                eval $cmd
+                
+                set cmd "$handle commit"
+                Deputs $cmd
+                eval $cmd
+                
+                set cmd "$handle save -force"
+                Deputs $cmd
+                eval $cmd
+            } else {
+                Deputs "No network $name found"
+                error "No network $name found"
+            }
+        } err ] } {
+            Deputs "----- Failed to configure network $name: $err -----"
             return [GetErrorReturnHeader $err]
         }
         return [GetStandardReturnHeader]
@@ -500,7 +576,7 @@ namespace eval IXIA {
         
         if { [ catch {
             if { [ info exists _loadProfiles($name) ] } {
-                set handle $_loadProfiles($testName)
+                set handle $_loadProfiles($name)
                 set cmd ""
                 if { [string tolower $action ] == "add" } {
                     set cmd "$handle addPhase $index $args"
@@ -512,11 +588,16 @@ namespace eval IXIA {
                     Deputs "Wrong action $action, action must be one of add, modify or remove"
                     error "Wrong action $action, action must be one of add, modify or remove"
                 }
+                Deputs $cmd
+                eval $cmd
+                set cmd "$handle save -force"
+                Deputs $cmd
+                eval $cmd
             } else {
-                Deputs "No load profile $testName found"
+                Deputs "No load profile $name found"
             }
         } err ] } {
-            Deputs "----- Failed to configure component $componentName: $err -----"
+            Deputs "----- Failed to configure load profile $name: $err -----"
             return [GetErrorReturnHeader $err]
         }
         return [GetStandardReturnHeader]
@@ -551,6 +632,10 @@ namespace eval IXIA {
                 set handle $_testSeries($name)
             } elseif { [ info exists _networks($name) ] } {
                 set handle $_networks($name)
+            } elseif { [ info exists _appProfiles($name) ] } {
+                set handle $_appProfiles($name)
+            } elseif { [ info exists _components($name) ] } {
+                set handle $_components($name)
             }
             
             if { $handle != "" } {
@@ -561,7 +646,65 @@ namespace eval IXIA {
                 Deputs "No resource with name: $name"
             }
         } err ] } {
-            Deputs "----- Failed to configure resource $name: $err -----"
+            Deputs "----- Failed to save resource $name: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: delete - Delete object
+    #--
+    # Parameters:
+    #       name: The name of object to delete, mandatory parameter
+    #       args:
+    #           ........
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::delete { name args } {
+        set tag "body Tester::delete $name $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists name ] } {
+            error "save name must be configured"
+        }
+        
+        set cmd ""
+        if { [ catch {
+            if { [ info exists _loadProfiles($name) ] } {
+                set cmd "$_connection deleteLoadProfile $name $args"
+                unset _loadProfiles($name)
+            } elseif { [ info exists _tests($name) ] } {
+                set cmd "$_connection deleteTest $name $args"
+                unset _tests($name)
+            } elseif { [ info exists _testSeries($name) ] } {
+                set cmd "$_connection deleteTestSeries $name $args"
+                unset _testSeries($name)
+            } elseif { [ info exists _networks($name) ] } {
+                set cmd "$_connection deleteNeighborhood $name $args"
+                unset _networks($name)
+            } elseif { [ info exists _appProfiles($name) ] } {
+                set cmd "$_connection deleteAppProfile $name $args"
+                unset _appProfiles($name)
+            } elseif { [ info exists _components($name) ] } {
+                set cmd "$_connection deleteLoadProfile $name $args"
+                unset _components($name)
+            }
+            
+            if { $cmd != "" } {
+                Deputs $cmd
+                eval $cmd
+                
+                set cmd "$_connection save -force"
+                Deputs $cmd
+                eval $cmd
+            } else {
+                Deputs "No resource with name: $name"
+            }
+        } err ] } {
+            Deputs "----- Failed to delete resource $name: $err -----"
             return [GetErrorReturnHeader $err]
         }
         return [GetStandardReturnHeader]
@@ -597,6 +740,44 @@ namespace eval IXIA {
             }
         } err ] } {
             Deputs "----- Failed to create load profile $name: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: createNetwork - Create network
+    #--
+    # Parameters:
+    #       name: The name of network neighorbood to create, mandatory parameter
+    #       args:
+    #           ........
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::createNetwork { name args } {
+        set tag "body Tester::createNetwork $name $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists name ] } {
+            error "createNetwork name must be configured"
+        }
+        
+        if { [ catch {
+            if { ![ info exists _networks($name) ] } {
+                set cmd "$_connection createNetwork -name $name $args"
+                Deputs $cmd
+                set _networks($name) [ eval $cmd ]
+                
+                set cmd "$_networks($name) save -name $name -force "
+                Deputs $cmd
+                eval $cmd
+            } else {
+                Deputs "Nework neihorhood $name has already exists"
+            }
+        } err ] } {
+            Deputs "----- Failed to create network neihorhood $name: $err -----"
             return [GetErrorReturnHeader $err]
         }
         return [GetStandardReturnHeader]
@@ -1060,6 +1241,19 @@ namespace eval IXIA {
                 set cmd "$handle createComponent $componentType $componentName $args"
                 Deputs $cmd
                 eval $cmd
+                
+                dict for { key value } [ $handle getComponents ] {
+                    if { [ string tolower [ $value cget -name ] ] == [ string tolower $componentName ] ||
+                        [ string tolower [ $value cget -name ] ] == [ string tolower ::$componentName ]} {
+                        Deputs "$value"
+                        set _components($componentName) "$value"
+                        break
+                    }
+                }
+                
+                set cmd "$handle save -force"
+                Deputs $cmd
+                eval $cmd
             } else {
                 Deputs "No test $testName found"
             }
@@ -1116,7 +1310,7 @@ namespace eval IXIA {
         set tag "body Tester::getRtStats $name $args [info script]"
         Deputs "----- TAG: $tag -----"
         
-        array set rtstats [list] 
+        array set stats [list] 
         foreach { key value } $args {
             set key [string tolower $key]
             Deputs "Key :$key \tValue :$value"
@@ -1132,14 +1326,14 @@ namespace eval IXIA {
         }
         
         if { ![ info exists IXIA::rtStats($name) ] } {
-            return [ array get rtstats ] 
+            return [ array get stats ] 
         }
         
         if { [ info exists filters ] } {
             foreach stat $filters {
                 dict for { key val } $IXIA::rtStats($name) {
                     if { [ string tolower $stat ] == [ string tolower $key ] } {
-                        set rtstats($key) $val
+                        set stats($key) $val
                         break
                     }
                 }   
@@ -1148,9 +1342,117 @@ namespace eval IXIA {
             return $IXIA::rtStats($name)
         }
 
-        return [ array get rtstats ] 
+        return [ array get stats ] 
     }
     
+    #--
+    # Name: getAggStats - Return aggregate test statitistcs
+    #--
+    # Parameters:
+    #       name: Test name or component name
+    #       args:
+    #           -filters: Filter desired results
+    # Return:
+    #        cpu_usage: CPU Usage
+    #        ethAlignmentErrors: Ethernet alignment errors
+    #        ethDropEvents: Ethernet drop events
+    #        ethFCSErrors: Ethernet FCS errors
+    #        ethOversizedFrames: Ethernet oversize frames
+    #        ethRxErrors: Ethernet receive errors
+    #        ethRxFrameData: Ethernet bytes received. This includes L7
+    #                        and all packet overhead, including L2,
+    #                        L3, L4 headers, ethernet CRC, and interpacket
+    #                        gap (20 bytes per frame).
+    #        ethRxFrameDataRate: Ethernet receive rate. This includes L7
+    #                        and all packet overhead, including L2,
+    #                        L3, L4 headers, ethernet CRC, and interpacket
+    #                        gap (20 bytes per frame)
+    #        ethRxFrameRate: Ethernet frame receive rate
+    #        ethRxFrames: Ethernet frames received
+    #        ethRxPauseFrames: Ethernet pause frames received
+    #        ethTotalErrors: Total Errors
+    #        ethTxErrors: Ethernet transmit errors
+    #        ethTxFrameData: Ethernet bytes transmit. This includes L7
+    #                        and all packet overhead, including L2,
+    #                        L3, L4 headers, ethernet CRC, and interpacket
+    #                        gap (20 bytes per frame).
+    #        ethTxFrameDataRate: Ethernet transmit rate. This includes L7
+    #                        and all packet overhead, including L2,
+    #                        L3, L4 headers, ethernet CRC, and interpacket
+    #                        gap (20 bytes per frame).
+    #        ethTxFrameRate: Ethernet frame transmit rate
+    #        ethTxFrames: Ethernet frames transmitted
+    #        ethTxPauseFrames: Ethernet pause frames transmitted
+    #        ethUndersizedFrames: Ethernet undersize frames
+    #        linux mem_free_kb: Free memory on the System Controller
+    #        mem_total_kb: Total memory on the System Controller
+    #        mem_used_kb: Used memory
+    #        mount percent_used: The percent of disk spaced used on the disk partition
+    #        superFlowRate: Super Flow rate
+    #        superFlows: Aggregate Super Flows
+    #        superFlowsConcurrent: Concurrent Super Flows
+    #        tcpFlowRate: TCP Flow rate
+    #        tcpFlows: Aggregate TCP Flows
+    #        tcpFlowsConcurrent: Concurrent TCP Flows
+    #        timestamp: The time that the datapoint was taken
+    #                            (refers to the rest of the data that comes
+    #                            with it)
+    #        udpFlowRate: UDP Flow rate
+    #        udpFlows: Aggregate UDP Flows
+    #        udpFlowsConcurrent: Concurrent UDP Flows
+    #
+    #        return [] if no results
+    #--
+    body Tester::getAggStats { name args } {
+        set tag "body Tester::getAggStats $name $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists name ] } {
+            error "getAggStats name must be specified"
+        }
+        
+        set handle ""
+        if { [ info exists _aggStats($name) ] } {
+            set handle $_aggStats($name)
+        } elseif { [ info exists _tests($name) ] } {
+            set handle $_tests($name)
+        } else {
+            Deputs "No test or component $name found"
+            error "No test or component $name found"
+        }
+        
+        array set stats [list] 
+        foreach { key value } $args {
+            set key [string tolower $key]
+            Deputs "Key :$key \tValue :$value"
+            switch -exact -- $key {
+                -filters {
+                    set filters $value
+                }
+            }
+        }
+        
+        if { [ catch {
+            set aggResults [ $handle result ]
+            if { [ info exists filters ] } {
+                foreach stat $filters {
+                    dict for { key val } [ $aggResults values aggStats ] {
+                        if { [ string tolower $stat ] == [ string tolower $key ] } {
+                            set stats($key) $val
+                            break
+                        }
+                    }   
+                }
+            } else {
+                array set stats [ $aggResults values aggStats ]
+            }
+        } err ] } {
+            Deputs "----- No results found for $name: $err -----"
+        }
+        
+        return [ array get stats ]
+    }
+        
     #--
     # debug puts
     #--
