@@ -36,11 +36,11 @@ namespace eval IXIA {
     
     proc cbRunTimeStats { name stats } {
         set IXIA::rtStats($name) $stats
-        puts "============================"
-        dict for { var val } $stats {
-            puts "$var: $val"
-        }
-        puts "============================"
+        #puts "============================"
+        #dict for { var val } $stats {
+        #    puts "$var: $val"
+        #}
+        #puts "============================"
     }
     
     proc cbAsyncRunTest { args } {

@@ -1,25 +1,25 @@
 #!/bin/sh
-lappend auto_path C:/Ixia/Workspace/ixia-bps-api
+lappend auto_path [file dirname [file dirname [info script]]]
 
 package require IxiaBps
 namespace import IXIA::*
 
 IxdebugOn
 
-set testId {test@66@127.0.0.1@DSTA_Test7_CXO_Data_Loss@8}
 set testName {MyAutoTest}
 set testNewName {MyAutoTest}
 
-set componentName {MyAutoTest}
+set componentName {MyAutoComponent}
 
-set loadProfileName {MyLoadProfile}
-set newLoadProfileName {MyLoadProfile}
+set loadProfileName {BreakingPoint Default}
+set newLoadProfileName {MyAutoLoadProfile}
 
-#Tester @tester 192.168.0.132 admin admin
-Tester @tester 172.16.174.131 admin admin
+Tester @tester 192.168.0.132 admin admin
+#Tester @tester 172.16.174.131 admin admin
 set conn [ @tester getConnection ]
 
-@tester createTest $testNewName -template $testName
+#@tester createTest $testNewName -template $testName
+@tester createTest $testNewName
 set test [ @tester getTest $testNewName ]
 
 @tester createLoadProfile $newLoadProfileName -template $loadProfileName
@@ -49,23 +49,35 @@ set component [ @tester getComponent $componentName ]
 #    -rampUpProfile.min 1
 #    -rampUpProfile.type calculated
 #
-@tester configure $componentName -rampDist.up 11:11:11
+@tester configure $componentName -rampDist.up 00:00:10 \
     -rampDist.upBehavior full \
-    -rampDist.steady 22:22:22 \
+    -rampDist.steady 00:00:60 \
     -rampDist.steadyBehavior cycle \
-    -rampDist.down 33:33:33 \
+    -rampDist.down 00:00:05 \
     -rampDist.downBehavior full \
-    -delayStart 99:99:99 \
-    -loadprofile $loadProfile
+    -delayStart 00:00:05 \
+    -loadprofile $newLoadProfileName
+
+@tester save $testNewName -force
 
 #@tester importTest Import1 -file C:/Tmp/Bps/import.bpt -force
 
-#@tester reservePort [list { 0 0 } { 0 1 }]
-#@tester run $testNewName -rtstats cbRunTimeStats
-#after 10000
-#@tester cancel $testNewName
+@tester reservePort [list { 0 0 } { 0 1 }]
+@tester run $testNewName -rtstats cbRunTimeStats -async cbAsyncRunTest
+set times 10
+while { $times > 0 } {
+    set rt [ @tester getRtStats $testNewName ]
+    puts "rt=============$rt"
+    after 2000
+    set times [ expr $times - 1 ]
+}
+@tester cancel $testNewName
+set cstats [ @tester getComponentStats $componentName ]
+puts "cstats=============$cstats"
+set agg [ @tester getAggStats $testNewName ]
+puts "agg=============$agg"
 #@tester exportTest $testNewName -file C:/Tmp/Bps/export1.bpt
-#@tester unreservePort [list { 0 0 } { 0 1 }]
+@tester unreservePort [list { 0 0 } { 0 1 }]
 
 #set conn [bps::connect 172.16.174.128 admin admin]
 #set test [$conn createTest -template $testName -name $testName]

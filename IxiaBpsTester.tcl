@@ -94,6 +94,7 @@ namespace eval IXIA {
         
         public method getRtStats { name args } {}
         public method getAggStats { name args } {}
+        public method getComponentStats { name args } {}
         public method getRtProcess { name } {
             if { [ info exists IXIA::rtProcess($name) ] } {
                 return $IXIA::rtProcess($name)
@@ -105,7 +106,10 @@ namespace eval IXIA {
         public method unreservePort { portlist } {}
         
         public method getChassis {} { return $_chassis }
-        public method getConnection {} { return IXIA::Tester::$_connection }
+        public method getConnection {} {
+            return $_connection
+            #return IXIA::Tester::$_connection
+        }
         public method getTest { name } {
             set testHandle ""
             if { [ catch {
@@ -229,10 +233,6 @@ namespace eval IXIA {
                 set cmd "$handle configure $args"
                 Deputs $cmd
                 eval $cmd
-                
-                set cmd "$handle save -force"
-                Deputs $cmd
-                eval $cmd
             } else {
                 Deputs "No object found with name: $name"
             }
@@ -244,7 +244,7 @@ namespace eval IXIA {
     }
     
     #--
-    # Name: configureComponent - Configure component object
+    # Name: configureAppProfile - Configure component object
     #--
     # Parameters:
     #       appProfileName: The name of application profile, mandatory parameter
@@ -325,9 +325,9 @@ namespace eval IXIA {
                 Deputs $cmd
                 eval $cmd
                 
-                set cmd "$handle save -force"
-                Deputs $cmd
-                eval $cmd
+                #set cmd "$handle save -force"
+                #Deputs $cmd
+                #eval $cmd
             } else {
                 Deputs "No app profile $appProfileName found"
                 error "No app profile $appProfileName found"
@@ -440,9 +440,9 @@ namespace eval IXIA {
                 Deputs $cmd
                 eval $cmd
                 
-                set cmd "$handle save -force"
-                Deputs $cmd
-                eval $cmd
+                #set cmd "$handle save -force"
+                #Deputs $cmd
+                #eval $cmd
             } else {
                 Deputs "No super flow $name found"
                 error "No super flow $name found"
@@ -522,9 +522,9 @@ namespace eval IXIA {
                 Deputs $cmd
                 eval $cmd
                 
-                set cmd "$handle save -force"
-                Deputs $cmd
-                eval $cmd
+                #set cmd "$handle save -force"
+                #Deputs $cmd
+                #eval $cmd
             } else {
                 Deputs "No network $name found"
                 error "No network $name found"
@@ -590,9 +590,9 @@ namespace eval IXIA {
                 }
                 Deputs $cmd
                 eval $cmd
-                set cmd "$handle save -force"
-                Deputs $cmd
-                eval $cmd
+                #set cmd "$handle save -force"
+                #Deputs $cmd
+                #eval $cmd
             } else {
                 Deputs "No load profile $name found"
             }
@@ -634,8 +634,6 @@ namespace eval IXIA {
                 set handle $_networks($name)
             } elseif { [ info exists _appProfiles($name) ] } {
                 set handle $_appProfiles($name)
-            } elseif { [ info exists _components($name) ] } {
-                set handle $_components($name)
             }
             
             if { $handle != "" } {
@@ -697,9 +695,9 @@ namespace eval IXIA {
                 Deputs $cmd
                 eval $cmd
                 
-                set cmd "$_connection save -force"
-                Deputs $cmd
-                eval $cmd
+                #set cmd "$_connection save -force"
+                #Deputs $cmd
+                #eval $cmd
             } else {
                 Deputs "No resource with name: $name"
             }
@@ -770,9 +768,9 @@ namespace eval IXIA {
                 Deputs $cmd
                 set _networks($name) [ eval $cmd ]
                 
-                set cmd "$_networks($name) save -name $name -force "
-                Deputs $cmd
-                eval $cmd
+                #set cmd "$_networks($name) save -name $name -force "
+                #Deputs $cmd
+                #eval $cmd
             } else {
                 Deputs "Nework neihorhood $name has already exists"
             }
@@ -1051,8 +1049,9 @@ namespace eval IXIA {
         if { [ catch {
             if { [ info exists _tests($name) ] } {
                 set handle $_tests($name)
-                set testId [ $handle resultId ]
-                set cmd "$_chassis cancelTest $testId $args"
+                #set testId [ $handle resultId ]
+                #set cmd "$_chassis cancelTest $testId $args"
+                set cmd "$handle cancel $args"
                 Deputs $cmd
                 eval $cmd
             } elseif { [ info exists _testSeries($name) ] } {
@@ -1243,17 +1242,19 @@ namespace eval IXIA {
                 eval $cmd
                 
                 dict for { key value } [ $handle getComponents ] {
-                    if { [ string tolower [ $value cget -name ] ] == [ string tolower $componentName ] ||
-                        [ string tolower [ $value cget -name ] ] == [ string tolower ::$componentName ]} {
-                        Deputs "$value"
-                        set _components($componentName) "$value"
-                        break
+                    if { $key != "aggstats" } {
+                        if { [ string tolower [ $value cget -name ] ] == [ string tolower $componentName ] ||
+                            [ string tolower [ $value cget -name ] ] == [ string tolower ::$componentName ]} {
+                            Deputs "$value"
+                            set _components($componentName) "$value"
+                            break
+                        }
                     }
                 }
                 
-                set cmd "$handle save -force"
-                Deputs $cmd
-                eval $cmd
+                #set cmd "$handle save -force"
+                #Deputs $cmd
+                #eval $cmd
             } else {
                 Deputs "No test $testName found"
             }
@@ -1415,7 +1416,10 @@ namespace eval IXIA {
         if { [ info exists _aggStats($name) ] } {
             set handle $_aggStats($name)
         } elseif { [ info exists _tests($name) ] } {
-            set handle $_tests($name)
+            if { [ info exists _tests($name) ] } {
+                set _aggStats($name) [ $_tests($name) getAggStats ]
+                set handle $_aggStats($name)
+            }
         } else {
             Deputs "No test or component $name found"
             error "No test or component $name found"
@@ -1436,15 +1440,17 @@ namespace eval IXIA {
             set aggResults [ $handle result ]
             if { [ info exists filters ] } {
                 foreach stat $filters {
-                    dict for { key val } [ $aggResults values aggStats ] {
+                    foreach key [ $aggResults values ] {
                         if { [ string tolower $stat ] == [ string tolower $key ] } {
-                            set stats($key) $val
+                            set stats($key) [ $aggResults get $key ]
                             break
                         }
                     }   
                 }
             } else {
-                array set stats [ $aggResults values aggStats ]
+                foreach key [ $aggResults values ] {
+                    set stats($key) [ $aggResults get $key ]
+                }  
             }
         } err ] } {
             Deputs "----- No results found for $name: $err -----"
@@ -1452,7 +1458,68 @@ namespace eval IXIA {
         
         return [ array get stats ]
     }
+     
+    body Tester::getComponentStats { name args } {
+        set tag "body Tester::getComponentStats $name $args [info script]"
+        Deputs "----- TAG: $tag -----"
         
+        if { ![ info exists name ] } {
+            error "getComponentStats name must be specified"
+        }
+        
+        array set stats [list] 
+        foreach { key value } $args {
+            set key [string tolower $key]
+            Deputs "Key :$key \tValue :$value"
+            switch -exact -- $key {
+                -filters {
+                    set filters $value
+                }
+            }
+        }
+        
+        if { [ catch {
+            set handle ""
+            if { [ info exists _componentStats($name) ] } {
+                set handle $_componentStats($name)
+            } else {
+                foreach { testName testHanle } [ array get _tests ] {
+                    dict for { component componentHandle } [ $testHanle getComponents ] {
+                        if { $component != "aggstats" } {
+                            if { [ string tolower [ $componentHandle cget -name ] ] == [ string tolower $name ] } {
+                                set _componentsStats($name) $componentHandle
+                                set handle $_componentsStats($name)
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+            
+            set aggResults [ $handle result ]
+            if { [ info exists filters ] } {
+                foreach stat $filters {
+                    foreach key [ $aggResults values ] {
+                        if { [ string tolower $stat ] == [ string tolower $key ] } {
+                            set stats($key) [ $aggResults get $key ]
+                            break
+                        }
+                    }   
+                }
+            } else {
+                foreach key [ $aggResults values ] {
+                    set stats($key) [ $aggResults get $key ]
+                }  
+            }
+            
+            itcl::delete object $aggResults
+        } err ] } {
+            Deputs "----- No results found for $name: $err -----"
+        }
+        
+        return [ array get stats ]
+    }
+    
     #--
     # debug puts
     #--
