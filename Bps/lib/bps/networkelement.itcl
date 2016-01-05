@@ -1,0 +1,174 @@
+itcl::class bps::NetworkElement {
+  inherit bps::Client
+
+  constructor {bpsobj networkclient domnode args} {
+    Client::constructor $bpsobj {}
+  } {}
+  destructor {}
+
+  public method type {} { return $_type }
+  public method settings {}
+
+  protected variable _networkclient
+  protected variable _id
+  protected variable _type
+  protected variable _params
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+
+  protected method _reopt {args}
+
+  protected method _userDescription {xmlnode prefix}
+}
+
+itcl::body bps::NetworkElement::constructor {
+	  bpsobj networkclient domnode args} {
+    set _networkclient $networkclient
+    set _id [$domnode selectNodes string\[@id='id'\]/child::node()]
+    if {$_id != ""} {
+        set _id [$_id asText]
+    }
+    set _type [$domnode @type]
+    set params {}
+    set params [model::ComponentProxy::parseNetworkParams $domnode]
+
+    set paramtype [$_bpsobj _networkParams $_type]
+    array set _default {}
+    if {$paramtype != ""} {
+        set _params [namespace which [$paramtype #auto -value $params \
+                                            -component [namespace which $this] \
+                                            -context $_bpsobj]]
+        set doc [namespace inscope [$_bpsobj info class] [list $_bpsobj _networkDoc]]
+        set node [$doc selectNodes "element\[@name='$_type'\]"]
+        if {$node != ""} {
+            foreach {opt val} [_describeStruct [$node selectNodes parameters] {}] {
+                # forget the -
+                set _default([string range $opt 1 end]) $val
+            }
+        }
+    }
+}
+
+itcl::body bps::NetworkElement::destructor {} {
+    namespace inscope [$_networkclient info class] \
+        [list $_networkclient _deleteElement $_type $_id]
+    if {[info exists _params]} {
+        catch {
+            itcl::delete object $_params
+            unset _params
+        }
+    }
+}
+
+itcl::body bps::NetworkElement::settings {} {
+    set doc [namespace inscope [$_bpsobj info class] [list $_bpsobj _networkDoc]]
+    set node [$doc selectNodes "element\[@name='$_type'\]"]
+    if {$node != ""} {
+      return [_userDescription [$node selectNodes parameters] {}]
+    }
+    return
+}
+
+itcl::body bps::NetworkElement::_cget {option} {
+    set xmlroot [namespace inscope [$_networkclient info class] \
+               [list $_networkclient _xmlroot]]
+    set xmlnode [$xmlroot selectNodes "$_type\[@id='$_id'\]"]
+    if {[info exists _params]} {
+        set check [$_params info class]
+        foreach level [split $option .] {
+            if {[catch {dict get [${check}::members] $level} check]} {
+                error "Unknown option \"-$option\""
+            }
+        }
+        set val [$_params cget -value]
+        if {[eval [list dict exists $val] [split $option .]]} {
+            return [eval [list dict get $val] [split $option .]]
+        }
+        return $_default($option)
+    }
+    error "Unknown option \"-$option\""
+}
+
+itcl::body bps::NetworkElement::_doConfigChange {args} {
+    namespace inscope [$_networkclient info class] \
+               [list $_networkclient _tryChange {
+        set xmlnode [$xmlroot selectNodes "networkModel/element\[@type='$_type'\]\[string \[@id='id'\]/child::node()='$_id'\]"]
+        set filtered {}
+        foreach {option value} $args {
+            if {![string match -?* $option]} {
+              error "invalid format, must be -option"
+            }
+            set option [string range $option 1 end]
+            if {$option == "id" && $value != "$_id"} {
+                error "ID must not be changed, create a new element with the new ID instead"
+            }
+            lappend filtered $option $value
+        }
+        if {[info exists _params]} {
+            set oldval [$_params cget -value]
+            set newval [eval _heirarchical [list $oldval] [_reopt $filtered]]
+            set paramtype [$_bpsobj _networkParams $_type]
+            set newparams [namespace which [$paramtype #auto -value $newval \
+                                        -component [namespace which $this] \
+                                        -context $_bpsobj]]
+            itcl::delete object $_params
+            set _params $newparams
+            foreach child [$xmlnode childNodes] {
+                $xmlnode removeChild $child
+            }
+            foreach {name type} [[$_params info class]::members] {
+                set str [$_params member $name]
+                if {$str == ""} continue
+                set xml [$str typedParamSpec $name]
+                $xmlnode appendXML $xml
+            }
+        }
+    } 2]
+    return
+}
+
+
+itcl::body bps::NetworkElement::_reopt {arglist} {
+    set ret {}
+    foreach {option value} $arglist {
+        lappend ret -$option $value
+    }
+    return $ret
+}
+
+itcl::body bps::NetworkElement::_userDescription {xmlnode prefix} {
+  if {$xmlnode == ""} {
+  	  return {}
+  }
+  if {$prefix != ""} {
+    set prefix ${prefix}.
+  }
+  set ret {}
+  foreach node [$xmlnode selectNodes child::*] {
+    set name [$node @id [$node @name ""]]
+    switch [$node nodeName] {
+      list -
+      struct {
+        eval lappend ret [_userDescription [$node selectNodes members] $prefix$name]
+      }
+      label -
+      description {
+      }
+      default {
+        set label [$node selectNodes label/child::node()]
+        if {$label != ""} {
+            set label [$label asText]
+        }
+        set desc [$node selectNodes description/child::node()]
+        if {$desc != ""} {
+            set desc [$desc asText]
+        }
+        lappend ret -$prefix[$node @id [$node @name ""]] [list label $label description $desc]
+      }
+    }
+  }
+  return $ret
+}
+
+package provide bps::NetworkElement 0.1

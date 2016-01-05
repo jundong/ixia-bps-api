@@ -1,0 +1,193 @@
+itcl::class bps::StrikeListClient {
+  inherit bps::Client
+
+  constructor {bpsobj template args} {
+    Client::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _construction 0
+  protected variable _xmldoc
+  protected variable _xmlroot
+  protected variable _counter 0
+
+  public method getQuery {}
+  public method setQuery {query}
+
+  public method getStrikes {}
+  public method addStrike {name}
+  public method setStrikesFromQuery {query}
+  public method removeStrike {name}
+
+  public method save {args}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+  protected method _updateXML {args}
+  protected method _createCommand {docvar rootvar command}
+  protected method _makeChange {domdoc}
+}
+
+itcl::body bps::StrikeListClient::constructor {
+	  bpsobj template args} {
+  _createCommand doc root setWorkingAttackPlan
+  if {[string compare $template ""] != 0} {
+    $root setAttribute template $template
+  }
+
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  set _construction 1
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+
+  set name [namespace tail $this]
+  $_bpsobj _exec [list workingAttackPlanModify -instance $_context \
+                     -name $name]
+  array set _default [list name $name]
+
+  configure -name $name
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  set _construction 2
+  return
+}
+
+itcl::body bps::StrikeListClient::destructor {} {
+  if {$_construction >= 1} {
+    catch {$_bpsobj _exec "workingAttackPlanForget -instance $_context"}
+  }
+}
+
+itcl::body bps::StrikeListClient::getQuery {} {
+  set ret {}
+  set ret [$_xmlroot selectNodes \
+      "queryString/child::node()"]
+  if {$ret != ""} {
+  		set ret [$ret asText]
+  }
+  return $ret
+}
+
+itcl::body bps::StrikeListClient::setQuery {query} {
+  _createCommand doc root workingAttackPlanModify 
+  $root appendFromScript {
+  		domNode::queryString {
+  				domNode::text $query
+  		}
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::StrikeListClient::getStrikes {} {
+	if {[getQuery] != ""} {
+			return [$_bpsobj searchStrikes -data false -limit 35000 -- [getQuery]]
+	}
+  set ret {}
+  foreach item [$_xmlroot selectNodes \
+      "list\[@id = 'attackPlan'\]/struct\[@id='Strikes'\]/list\[@id='strikes'\]/struct/param"] {
+    lappend ret [[$item selectNodes child::node()] asText]
+  }
+  return $ret
+}
+
+itcl::body bps::StrikeListClient::addStrike {name} {
+	if {[getQuery] != ""} {
+		error "Unable to add individual strikes to a smart strike list - try appending \"OR pathid:<id>\" to your query"
+	}
+  _createCommand doc root workingAttackGroupAddStrike 
+  $root setAttribute groupid Strikes
+  $root appendFromScript {
+    domNode::strike -id $name
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::StrikeListClient::setStrikesFromQuery {query} {
+  _createCommand doc root workingAttackPlanSetStrikesFromQuery 
+  $root appendFromScript {
+    domNode::queryString {
+    		domNode::text $query
+    }
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::StrikeListClient::removeStrike {name} {
+	if {[getQuery] != ""} {
+		error "Unable to remove individual strikes from a smart strike list"
+	}
+  _createCommand doc root workingAttackGroupRemoveStrike
+  $root setAttribute groupid Strikes
+  $root appendFromScript {
+    domNode::strike -id $name
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::StrikeListClient::save {args} {
+  set optlist {
+      {name.arg {} "saved model name"}
+      {force false "overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+  _createCommand doc root workingAttackPlanSave
+  foreach attr {name force} {
+    $root setAttribute $attr $opts($attr)
+  }
+  _makeChange $doc
+}
+
+itcl::body bps::StrikeListClient::_cget {option} {
+  switch -exact -- $option {
+    name {return [$_xmlroot @name]}
+  }
+  error "Unknown option $option"
+}
+
+itcl::body bps::StrikeListClient::_doConfigChange {args} {
+  foreach {option value} $args {
+    switch -exact -- $option {
+      -name {
+        _createCommand doc root workingAttackPlanModify
+        $root setAttribute name $value
+        _makeChange $doc
+      }
+      default {
+        error "Unknown option $option"
+      }
+    }
+  }
+  return
+}
+
+itcl::body bps::StrikeListClient::_updateXML {} {
+  set ret [$_bpsobj _exec [list getWorkingAttackPlan -instance $_context]]
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+  return
+}
+
+itcl::body bps::StrikeListClient::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+}
+
+itcl::body bps::StrikeListClient::_makeChange {domdoc} {
+  set ret [$_bpsobj _execXml [$domdoc asXML]]
+  _updateXML
+  return $ret
+}
+
+package provide bps::StrikeListClient 0.1

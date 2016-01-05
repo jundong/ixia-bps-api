@@ -1,0 +1,33 @@
+package require Itcl
+
+itcl::class %CLASS% {
+  inherit model::String
+
+  constructor {args} {}
+  destructor {}
+
+  protected common minlength %MINLENGTH%
+  protected common maxlength %MAXLENGTH%
+  protected common charclass %CHARCLASS%
+
+  public variable value
+}
+
+itcl::body %CLASS%::constructor {args} {
+  set _type string
+  eval configure $args
+  if {![info exists value]} {
+    configure -value "%DEFAULT%"
+    if {![info exists value]} {
+       error "value must be specified" {} RUNTIME_ERROR
+    }
+  }
+}
+
+itcl::body %CLASS%::destructor {} {
+}
+
+itcl::configbody %CLASS%::value {
+}
+
+log::log warn "string %CLASS% declared"

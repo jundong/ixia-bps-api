@@ -1,0 +1,144 @@
+package require Itcl
+package require infostack
+
+itcl::class %CLASS% {
+  inherit model::Struct
+
+  constructor {args} {}
+  destructor {}
+
+  protected common members
+
+  protected common constraints { %CONSTRAINTS% }
+  # { <name> required }
+  # { <name> greater <name2> }
+  # { <name> greater <value> }
+  # { <name> greater <value> <name2> required}
+
+  public proc members {}
+  public method member {name}
+  public method paramSpec {key {indent {}}}
+  public method typedParamSpec {key {indent {}}}
+  public method localname {}
+  public method localmembername {mname}
+
+  public variable value
+
+  protected variable value_arr
+
+  protected proc _deleteInstances {instances}
+}
+namespace eval %CLASS% array set members [list { %MEMBERS% }]
+
+itcl::body %CLASS%::constructor {args} {
+  set _type struct
+  # need to put component and model in place first
+  foreach arg {component model itemname context} {
+    set cfgix [lsearch $args -$arg]
+    if {$cfgix != -1 && ($cfgix % 2) == 0 && ([llength $args] % 2) == 0} {
+      configure -$arg [lindex $args [expr $cfgix + 1]]
+    }
+  }
+  eval configure $args
+  if {![info exists value]} {
+    error "value must be specified" {} RUNTIME_ERROR
+  }
+}
+
+itcl::body %CLASS%::destructor {} {
+  %CLASS%::_deleteInstances [array get value_arr]
+}
+
+itcl::body %CLASS%::_deleteInstances {instances} {
+  foreach {name inst} $instances {
+    catch {itcl::delete object $inst}
+  }
+}
+
+itcl::configbody %CLASS%::value {
+  if {[catch {
+    foreach {name val} $value {
+      if {![info exists members($name)]} {
+	error "unknown struct member \"$name\", must be one of [join [array names members] ", "]" {} RUNTIME_ERROR
+      }
+      if {$val == ""} {
+	# if it's not a struct
+	set heritage [namespace eval $members($name) {info heritage}]
+	if {[lsearch $heritage "::model::Struct"] == -1} {
+	  continue ;# treat empty value same as unspecified
+	}
+      }
+      set temp($name) [namespace which [$members($name) #auto \
+                          -value $val \
+			  -itemname [localmembername $name] \
+			  -component $component \
+			  -model $model \
+                          -context $context]]
+    }
+  } err]} {
+    # need to get rid of instances that got created
+    global errorInfo errorCode
+    %CLASS%::_deleteInstances [array get temp]
+    error $err $errorInfo $errorCode
+  }
+
+  # everything succeeded, now commit to our instance var
+  %CLASS%::_deleteInstances [array get value_arr]
+  array set value_arr [array get temp]
+}
+
+itcl::body %CLASS%::members {} {
+  return [array get members]
+}
+
+itcl::body %CLASS%::member {name} {
+  if {![info exists members($name)]} {
+    error "unknown struct member \"$name\", must be one of [join [array names members] ", "]" {} RUNTIME_ERROR
+  }
+  if {[info exists value_arr($name)]} {
+    return $value_arr($name)
+  }
+  return ""
+}
+
+itcl::body %CLASS%::paramSpec {key {indent {}}} {
+  dom createDocument struct doc
+  $doc documentElement root
+  $root setAttribute id $key
+  foreach name [array names members] {
+    if {[info exists value_arr($name)]} {
+      set xml [$value_arr($name) paramSpec $name]
+      if {$xml != ""} {
+        $root appendXML $xml
+      }
+    }
+  }
+  return [$root asXML -indent [string length $indent]]
+}
+
+itcl::body %CLASS%::typedParamSpec {key {indent {}}} {
+  dom createDocument struct doc
+  $doc documentElement root
+  $root setAttribute id $key
+  foreach name [array names members] {
+    if {[info exists value_arr($name)]} {
+      set xml [$value_arr($name) typedParamSpec $name]
+      if {$xml != ""} {
+        $root appendXML $xml
+      }
+    }
+  }
+  return [$root asXML -indent [string length $indent]]
+}
+
+itcl::body %CLASS%::localname {} {
+  return $itemname
+}
+
+itcl::body %CLASS%::localmembername {mname} {
+  set localname [localname]
+  if {$localname != ""} {
+    return "$localname.$mname"
+  }
+  return $mname
+}

@@ -1,5 +1,5 @@
 #!/bin/sh
-lappend auto_path C:/Ixia/Workspace/ixia-bps-api
+lappend auto_path [file dirname [file dirname [info script]]]
 
 package require IxiaBps
 namespace import IXIA::*

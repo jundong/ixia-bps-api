@@ -1,0 +1,64 @@
+package require Itcl
+package require ack
+
+itcl::class %CLASS% {
+  inherit model::HostRef
+
+  constructor {args} {}
+  destructor {}
+
+  public variable value
+
+  public method paramSpec {key {indent {}}}
+  public method typedParamSpec {key {indent {}}}
+}
+
+itcl::body %CLASS%::constructor {args} {
+  set _type hostref
+  # need to put component and model in place first
+  foreach arg {component model} {
+    set cfgix [lsearch $args -$arg]
+    if {$cfgix != -1 && ($cfgix % 2) == 0 && ([llength $args] % 2) == 0} {
+      eval [list configure -$arg [lindex $args [expr $cfgix + 1]]]
+    }
+  }
+  configure -value default
+  eval configure $args
+  if {![info exists value]} {
+    error "value must be specified" {} RUNTIME_ERROR
+  }
+}
+
+itcl::body %CLASS%::destructor {} {
+}
+
+itcl::configbody %CLASS%::value {
+}
+
+itcl::body %CLASS%::paramSpec {key {indent {}}} {
+  # if "config" exists, were on the server, otherwise in the TCL client
+  if {[itcl::find objects ::config] == ""} {
+    dom createDocument hostref doc
+    $doc documentElement root
+    $root setAttribute id $key
+    $root appendFromScript {
+      domNode::text [$this cget -value]
+    }
+    return [$doc asXML]
+  }
+  dom createDocument hostref doc
+  $doc documentElement root
+  $root setAttribute id $key
+  $root appendFromScript {
+    domNode::param -id name {
+      domNode::text [$this cget -value]
+    }
+  }
+  return [$doc asXML]
+}
+
+itcl::body %CLASS%::typedParamSpec {key {indent {}}} {
+  return [paramSpec $key $indent]
+}
+
+log::log warn "hostref %CLASS% declared"

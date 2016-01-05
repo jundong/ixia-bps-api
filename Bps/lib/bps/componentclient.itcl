@@ -1,0 +1,656 @@
+itcl::class bps::ComponentClient {
+  inherit bps::Client
+
+  constructor {bpsobj context testclient compname type domnode args} {
+    Client::constructor $bpsobj $context
+  } {}
+  destructor {}
+
+  protected variable _testclient
+  protected variable _compalias
+  protected variable _compname
+  protected variable _type
+  protected variable _id
+  protected variable _params
+  protected variable _paramsNS
+  protected variable _construction 0
+  protected variable _interfaces {}
+  protected variable _tags
+  protected variable _active true
+  protected variable _reportResults true
+  protected variable _counter 0
+  protected variable _name
+  protected variable _description
+
+  public method id {} { return $_id }
+  public method settings {}
+  public method result {}
+  public method getGroups {}
+  public method historicalResultSize {group}
+  public method historicalResult {group index}
+
+  public method setDomain {type ifnumber domain}
+  public method unsetDomain {type ifnumber}
+  public method getDomains {}
+  public method getDomain {type ifnumber}
+
+  public method getType {args}
+  public method isActive {} { return $_active }
+  public method setActive {value}
+  public method reportsResults {} { return $_reportResults }
+  public method reportResults {value}
+  public method getParamOverrides {}
+
+  protected method _updateServer {params tagdata}
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+  protected method _initializeDefaults {paramtype {prefix {}}}
+
+  protected method _describeNestedStruct {xmlnode}
+  protected method _getOverrideParamObj {}
+  protected method _getResultData {cmd {group {}} {index {}}}
+
+  protected method _userDescription {xmlnode prefix}
+}
+
+itcl::body bps::ComponentClient::constructor {
+	  bpsobj context testclient compalias compname type domnode args} {
+  set _testclient $testclient
+  set _compalias $compalias
+  set _compname $compname
+  set _type $type
+
+  if {$type != {aggregate_statistics}} {
+      $_testclient clearResults
+	  # put the class that gets declared in a namespace based on bpsobj, so it can
+	  # be cleaned up with bpsobj gets deleted
+          set _paramsNS ${_bpsobj}::${compalias}::parameters[$_bpsobj _getId]
+	  set paramtype [$_bpsobj _componentParams $_paramsNS $compalias]
+	
+	  _initializeDefaults $paramtype
+  
+    if {$domnode == {}} {
+      dom createDocument workingModelAddComponent doc
+      $doc documentElement root
+      $root setAttribute instance $_context
+      $root setAttribute verbose true
+      $root setAttribute component $compname
+      $root setAttribute name [namespace tail $this]
+      set ret [$_bpsobj _execXml [$doc asXML]]
+      set _construction 1
+      dom parse $ret dom
+      $dom documentElement doc
+      set ifs [$doc selectNodes interfaces]
+      foreach if [$doc selectNodes interfaces/interface] {
+        setDomain [$if @type] [$if @number {}] {}
+        $ifs removeChild $if
+      }
+    } else {
+      set doc $domnode
+    }
+    set _id [$doc @id]
+    set _active [$doc @active true]
+    set _reportResults [$doc @reportResults true]
+    set params [model::ComponentProxy::parseComponentParams $doc]
+    array set _default [model::ComponentProxy::flatComponentParams $doc]
+  
+    set _params [namespace which [$paramtype #auto -value $params \
+                                        -component [namespace which $this] \
+                                        -context $_bpsobj]]
+  
+    set _name [$doc selectNodes label/child::node()/child::node()]
+    if {$_name != ""} {
+    		set _name [$_name asText]
+    }
+    set _default(name) $_name
+    set _description [$doc selectNodes description/child::node()/child::node()]
+    if {$_description != ""} {
+    		set _description [$_description asText]
+    }
+    set _default(description) $_description
+
+    # initialize tag list
+    foreach tagtype {client server} {
+        set _tags($tagtype) {}
+        foreach tag [$doc selectNodes \
+                "tags/tag\[@type='$tagtype'\]"] {
+            if {![$tag hasAttribute id]} continue
+            lappend _tags($tagtype) [$tag @id]
+        }
+        set _default(${tagtype}_tags) $_tags($tagtype)
+    }
+
+    foreach if [$doc selectNodes interfaces/interface] {
+      if {![$if hasAttribute type] || ![$if hasAttribute domain]} continue
+      set type [$if @type]
+      if {$type != "none"} {
+	      set num [$if @number {}]
+	      if {$type == "external"} {
+	      	  set type server
+	      	  set num external
+	      }
+	      if {![dict exists $_interfaces $type]} {
+	        dict set _interfaces $type {}
+	      }
+	      dict set _interfaces $type $num [$if @domain]
+	  }
+    }
+    if {[llength $args] > 0} {
+      # take config overrides from args
+      eval configure $args
+    }
+  } else {
+      set _id aggstats
+  }
+  set _construction 2
+  return
+}
+
+itcl::body bps::ComponentClient::destructor {} {
+  if {$_construction > 1} {
+    $_bpsobj clearResults $_context
+    if {$_type != {aggregate_statistics}} {
+	    set ret [$_bpsobj _exec [list workingModelRemoveComponent \
+		      -instance $_context -id $_id]]
+	}
+  } elseif {$_construction == 1} {
+    set ret [$_bpsobj _exec [list workingModelChooseRevision \
+               -instance $_context -id prev]]
+  }
+  $_testclient _updateXML
+  if {[info exists _params]} {
+    catch {
+      itcl::delete object $_params
+      unset _params
+    }
+    namespace delete $_paramsNS
+  }
+  $_testclient _componentDelete $_id
+}
+
+itcl::body bps::ComponentClient::settings {} {
+    set doc [namespace inscope [$_bpsobj info class] $_bpsobj _componentDoc $_type]
+    if {$doc != ""} {
+      return [_userDescription [$doc selectNodes parameters] {}]
+    }
+    return
+}
+
+itcl::body bps::ComponentClient::_cget {option} {
+  switch -- $option {
+  		name {
+  			return $_name
+  		}
+  		description {
+  			return $_description
+  		}
+  		client_tags -
+  		server_tags {
+  		    set tagtype [lindex [split $option _] 0]
+  		    return $_tags($tagtype)
+  		}
+  }
+  if {[eval [list dict exists [$_params cget -value]] [split $option .]]} {
+    return [eval [list dict get [$_params cget -value]] [split $option .]]
+  }
+  return
+}
+
+itcl::body bps::ComponentClient::_updateServer {params tagdata} {
+  # update server side
+  dom createDocument workingModelModifyComponent doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+  $root setAttribute verbose true
+  $root setAttribute id $_id
+  foreach {name type} [[$params info class]::members] {
+  	if {$_type == "security_all"
+  			&& $name == "paramOverrides"} {
+        set paramtype [_getOverrideParamObj]
+        try {
+            set param [$paramtype #auto -value [[$params member $name] cget -value]]
+            set xml [$param paramSpec $name]
+        } finally {
+            if {[info exists param]} {
+              itcl::delete object $param
+            }
+            namespace delete [namespace qualifiers $paramtype]
+        }
+  	} else {
+        set xml [[$params member $name] paramSpec $name]
+    }
+    if {$xml != ""} {
+      $root appendXML $xml
+    }
+  }
+  array set newtags $tagdata
+  $root appendFromScript {
+    domNode::tags {
+      	foreach tagtype [array names newtags] {
+      		foreach tag $newtags($tagtype) {
+      		    domNode::tag -type $tagtype -id $tag
+      		}
+      	}
+    }
+  }
+  $_bpsobj _execXml [$doc asXML]
+}
+
+itcl::body bps::ComponentClient::result {} {
+		return [_getResultData getComponentResultData]
+}
+
+itcl::body bps::ComponentClient::getGroups {} {
+		return [$_bpsobj _componentGroups $_type]
+}
+
+itcl::body bps::ComponentClient::historicalResultSize {group} {
+    set resultid [$_testclient resultId]
+    dom createDocument getComponentResultSize doc
+    $doc documentElement root
+    $root setAttribute componentid $_id
+    $root setAttribute group $group
+    $root appendFromScript {
+    		namespace inscope ::bps::BPSConnection bps::BPSConnection::_appendTestResultId $resultid
+    }
+    set ret [$_bpsobj _execXml [$doc asXML]]
+    dom parse $ret doc
+    $doc documentElement root
+    return [expr [$root @results] + 1]
+}
+
+itcl::body bps::ComponentClient::historicalResult {group index} {
+		return [_getResultData getComponentResultSeries $group $index]
+}
+
+itcl::body bps::ComponentClient::setDomain {type ifnumber domain} {
+  if {[string compare [getDomain $type $ifnumber] $domain] == 0} return
+  # backwards compatibility
+  if {$type == "external"} {
+  	  set type server
+  	  set ifnumber external
+  }
+  if {[lsearch {client server} $type] == -1} {
+  	  error "Invalid type \"$type\", must be either 'client' or 'server'"
+  }
+  if {$ifnumber == ""} {
+    set ifnumber external
+  }
+  if {![string is integer -strict $ifnumber]} {
+  		if {$ifnumber != "external"} {
+  				error "Invalid interface \"$ifnumber\""
+  		}
+  } elseif {$ifnumber <= 0} {
+  		error "Invalid interface \"$ifnumber\""
+  }
+  set newdata $_interfaces
+
+  if {![dict exists $newdata $type]} {
+    dict set newdata $type {}
+  }
+
+  if {[string compare $domain {}] == 0} {
+    dict unset newdata $type $ifnumber
+  } else {
+    dict set newdata $type $ifnumber $domain
+  }
+
+  dom createDocument workingModelModifyComponent doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+  $root setAttribute id $_id
+  $root setAttribute verbose true
+  $root appendFromScript {
+    domNode::interfaces {
+      dict for {type data} $newdata {
+        dict for {num domain} $data {
+          if {$num == "external"} {
+              domNode::interface -type external -number "" -domain $domain
+          } else {
+              domNode::interface -type $type -number $num -domain $domain
+          }
+        }
+      }
+    }
+  }
+
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  dom parse $ret retdoc
+  $retdoc documentElement retroot
+  set _interfaces $newdata
+  array unset _tags
+  array set _tags {client {} server {}}
+  $_testclient _updateXML
+  foreach tagtype {client server} {
+      set _tags($tagtype) {}
+      foreach tag [$retroot selectNodes \
+              "tags/tag\[@type='$tagtype'\]"] {
+          if {![$tag hasAttribute id]} continue
+          lappend _tags($tagtype) [$tag @id]
+      }
+  }
+  return
+}
+
+itcl::body bps::ComponentClient::unsetDomain {type ifnumber} {
+		setDomain $type $ifnumber {}
+}
+
+itcl::body bps::ComponentClient::getDomains {} {
+  set ret {}
+  dict for {type data} $_interfaces {
+    dict for {num domain} $data {
+      lappend ret [list $type $num $domain]
+    }
+  }
+  return $ret
+}
+
+itcl::body bps::ComponentClient::getType {args} {
+    array set opts [cmdline::getoptions args {
+        {base "give base type"}
+    }]
+
+    if {$opts(base)} {
+        return $_type
+    }
+    return $_compalias
+}
+
+itcl::body bps::ComponentClient::setActive {value} {
+  dom createDocument workingModelModifyComponent doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+  $root setAttribute id $_id
+  $root setAttribute active $value
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  set _active $value
+  return
+}
+
+itcl::body bps::ComponentClient::reportResults {value} {
+  dom createDocument workingModelModifyComponent doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+  $root setAttribute id $_id
+  $root setAttribute reportResults $value
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  set _reportResults $value
+  return
+}
+
+itcl::body bps::ComponentClient::getParamOverrides {} {
+  if {$_type != "security_all"} {
+		error "Unsupported operation for this component type"
+  }
+  dom createDocument workingModelSecurityEdit doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+  $root setAttribute id $_id
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+  return [_describeNestedStruct [$root selectNodes members]]
+}
+
+itcl::body bps::ComponentClient::getDomain {type ifnumber} {
+  if {$type == "external"} {
+    set ifnumber {}
+  }
+  if {[catch {dict get $_interfaces $type $ifnumber} domain]} {
+    return {}
+  }
+  return $domain
+}
+
+itcl::body bps::ComponentClient::_doConfigChange {args} {
+  set filtered {}
+  set label \0
+  set description \0
+  array set newtags [array get _tags]
+  set updatetags false
+  foreach {option value} $args {
+  		switch -- $option {
+  				-name {
+  					set label $value
+  				}
+  				-description {
+  					set description $value
+  				}
+  				-client_tags -
+  				-server_tags {
+  					set tagtype [string range $option 1 6]
+  					set newtags($tagtype) $value
+  					set updatetags true
+  				}
+  				default {
+  					lappend filtered $option $value
+  				}
+  		}
+  }
+
+  set oldval [$_params cget -value]
+  set ns ${_bpsobj}::${_compalias}::parameters[$_bpsobj _getId]
+  set newval [eval _heirarchical [list $oldval] $filtered]
+  if {[catch {
+    if {$newval != $oldval || $updatetags} {
+        set paramtype [$_bpsobj _componentParams $ns $_compalias]
+        set newparams [namespace which [$paramtype #auto -value $newval \
+                                                -component [namespace which $this] \
+                                                -context $_bpsobj]]
+
+        $this _updateServer $newparams [array get newtags]
+    }
+
+    # if we get here, there was no error
+    if {$label != "\0" || $description != "\0"} {
+      dom createDocument workingModelModifyComponentInfo doc
+      $doc documentElement root
+      $root setAttribute instance $_context
+      $root setAttribute verbose false
+      $root setAttribute id $_id
+      $root appendFromScript {
+      		if {$label != "\0"} {
+      				domNode::label {
+      						domNode::string {
+      								domNode::text $label
+      						}
+      				}
+      		}
+      		if {$description != "\0"} {
+      				domNode::description {
+      						domNode::string {
+      								domNode::text $description
+      						}
+      				}
+      		}
+      }
+      $_bpsobj _execXml [$doc asXML]
+    }
+    $_testclient _updateXML
+
+    if {$newval != $oldval || $updatetags} {
+        set _params $newparams
+        namespace delete $_paramsNS
+        set _paramsNS $ns
+    }
+    if {$label != "\0"} {
+    		set _name $label
+    }
+    if {$description != "\0"} {
+    		set _description $description
+    }
+    if {$updatetags} {
+        array set _tags [array get newtags]
+        set _interfaces {}
+    }
+  } err]} {
+    global errorInfo errorCode
+    set ei $errorInfo
+    set ec $errorCode
+    catch {namespace delete $ns}
+    error $err $ei $ec
+  }
+  return
+}
+
+itcl::body bps::ComponentClient::_initializeDefaults {paramtype {prefix {}}} {
+  if {$prefix != ""} {
+    set prefix ${prefix}.
+  }
+  foreach {name type} [${paramtype}::members] {
+    if {[itcl::is class $type]
+        && ![catch {${type}::members}]} {
+      _initializeDefaults $type ${prefix}$name
+    } else {
+      set _default(${prefix}$name) {}
+    }
+  }
+  return
+}
+
+itcl::body bps::ComponentClient::_describeNestedStruct {xmlnode} {
+  set ret {}
+  foreach node [$xmlnode selectNodes child::*] {
+    set name [$node @id [$node @name ""]]
+    switch [$node nodeName] {
+      list -
+      struct {
+        lappend ret $name [_describeNestedStruct [$node selectNodes members]]
+      }
+      default {
+        set descnode [$node selectNodes description/child::*/child::node()]
+        set description ""
+        if {$descnode != ""} {
+          set description [$descnode asXML]
+        }
+        lappend ret $name $description
+      }
+    }
+  }
+  return $ret
+}
+
+itcl::body bps::ComponentClient::_getOverrideParamObj {} {
+  dom createDocument workingModelSecurityEdit doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+  $root setAttribute id $_id
+  set desc [$_bpsobj _execXml [$doc asXML]]
+  dom parse $desc doc
+  $doc documentElement root
+  set namespace [namespace current]::s[incr _counter]
+
+  set memberlist [model::processTypeDeclarationList $namespace \
+                                   [$root selectNodes members] ]
+  set constraintlist {}
+  return [model::defineStruct $namespace params \
+                                         $memberlist \
+                                         $constraintlist]
+}
+
+itcl::body bps::ComponentClient::_getResultData {cmd {group {}} {index {}}} {
+  set resultid [$_testclient resultId]
+
+  array set results {}
+  array set combine {}
+    dom createDocument $cmd doc
+    $doc documentElement root
+    $root setAttribute componentid $_id
+    if {$group != ""} {
+        $root setAttribute group $group
+    }
+    if {$index != ""} {
+    		$root setAttribute dataindex $index
+    }
+    $root appendFromScript {
+    		namespace inscope ::bps::BPSConnection bps::BPSConnection::_appendTestResultId $resultid
+    }
+
+    set paramxml [$_bpsobj _execXml [$doc asXML]]
+    dom parse $paramxml dom
+    $dom documentElement droot
+    foreach param [$droot selectNodes param] {
+      set name [$param @name]
+      set interface -1
+        foreach node [$param selectNodes "param\[@id='interface'\]"] {
+            set interface [$node text]
+        }
+      set vlan ""
+        foreach node [$param selectNodes "param\[@id='vlan'\]"] {
+            set vlan [$node text]
+        }
+      set protocol ""
+        foreach node [$param selectNodes "param\[@id='protocol'\]"] {
+            set protocol [$node text]
+        }
+      set key $name\0$interface\0$protocol\0$vlan
+      set pval [$param text]
+      if {[info exists results($key)] &&
+          ([string is integer -strict $pval] 
+            || [string is double -strict $pval])
+          && ([string is integer -strict $results($key)]
+              || [string is double -strict $results($key)])} {
+        if {[$param @combine none] == "min"} {
+      	    set results($key) [expr min($pval,$results($key))]
+        } elseif {[$param @combine none] == "max"} {
+      	    set results($key) [expr max($pval,$results($key))]
+        } elseif {[$param @combine none] == "none"} {
+            set results($key) $pval
+        } else {
+      	    set results($key) [expr $pval + $results($key)]
+      	}
+      } elseif {[string is integer $pval] || [string is double $pval]} {
+        if {$pval == ""} { set pval 0 }
+        set results($key) $pval
+      } elseif {[$param @combine none] == "none"} {
+        # just store the literal value
+        set results($key) $pval
+      } else {
+        error "not sure what to do with value \"$pval\" for key \"$key\""
+      }
+      set combine($name) [$param @combine ""]
+    }
+
+  return [uplevel 2 [list bps::Result #auto [array get results] \
+                                          [array get combine]]]
+}
+
+itcl::body bps::ComponentClient::_userDescription {xmlnode prefix} {
+  if {$xmlnode == ""} {
+  	  return {}
+  }
+  if {$prefix != ""} {
+    set prefix ${prefix}.
+  }
+  set ret {}
+  foreach node [$xmlnode selectNodes child::*] {
+    set name [$node @id [$node @name ""]]
+    if {$name == ""} continue
+    switch [$node nodeName] {
+      list -
+      struct -
+      dynstruct {
+        eval lappend ret [_userDescription [$node selectNodes members] $prefix$name]
+      }
+      label -
+      description {
+      }
+      default {
+        set label [$node selectNodes label/child::node()/child::node()]
+        if {$label != ""} {
+            set label [$label asText]
+        }
+        set desc [$node selectNodes description/child::node()/child::node()]
+        if {$desc != ""} {
+            set desc [$desc asText]
+        }
+        lappend ret -$prefix[$node @id [$node @name ""]] [list label $label description $desc]
+      }
+    }
+  }
+  return $ret
+}
+
+
+package provide bps::ComponentClient 0.1

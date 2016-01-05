@@ -1,0 +1,265 @@
+itcl::class bps::LTEClient {
+  inherit bps::LabClient
+  lappend bps::LabClient::_subclasses ::bps::LTEClient
+
+  constructor {bpsobj template args} {
+    LabClient::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  public method save {args}
+
+  public method getComponents {}
+
+  public method getMMEs {}
+  public method addMME {args}
+  public method removeMME {index}
+
+  # this is a no-op for this type of test
+  public method _componentDelete {id} {
+    if {[info exists _componentObjs(id)]} {
+        unset _componentObjs(id)
+    }
+  }
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+
+  protected variable _componentObjs
+
+  protected common _optionNames
+  set _optionNames {
+    plmn_mcc
+    plmn_mnc
+
+    numUE
+    num_dedicated_bearers
+    imsi_base
+    msisdn_base
+    appProfile
+    apn
+    secretKey
+    secretKeyStep
+    operatorVariant
+
+    numEnodeB
+    netaddr
+    netmask
+    gateway
+    startingIP
+    dnsServerIP
+    domainName
+    sctp_over_udp
+    sctp_sport
+
+    pdn_netaddr
+    pdn_netmask
+    pdn_gateway
+    pdn_router
+    pdn_startingIP
+    pdn_numHosts
+    duration
+    dataRate
+    alloc_rate
+  }
+}
+
+#  <lteLab numUE="1" 
+#          num_dedicated_bearers="0"
+#          imsi_base="240011234567000" 
+#          msisdn_base="123456789" 
+#          appProfile="BreakingPoint Mobile User" 
+#          apn="internet" 
+#          numEnodeB="1" 
+#          netaddr="10.0.1.0" 
+#          netmask="24" 
+#          gateway="10.0.1.1" 
+#          startingIP="10.0.1.18" 
+#          dnsServerIP="10.0.1.3" 
+#          domainName="example.org" 
+#          pdn_netaddr="10.0.1.0" 
+#          pdn_netmask="24" 
+#          pdn_gateway="10.0.1.1" 
+#          pdn_startingIP="10.0.1.2" 
+#          pdn_numHosts="30" 
+#          duration="00:01:00">
+#    <mme>mmepool</mme>
+#  </lteLab>
+
+
+itcl::body bps::LTEClient::constructor {
+	  bpsobj template args} {
+  _setWorkingModel {Breakingpoint LTE Lab} \
+                   {LTE Template} \
+                   $template
+  set control [$_xmlroot selectNodes //lteLab]
+  array set _default {}
+  foreach attr $_optionNames {
+  	set _default($attr) [$control @$attr ""]
+  }
+  foreach attr {dut network name} {
+    set _default($attr) [$_xmlroot @$attr ""]
+  }
+
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::LTEClient::destructor {} {
+}
+
+itcl::body bps::LTEClient::save {args} {
+  eval [list _saveNamed {Custom LTE Test} -name [$_xmlroot @name]] $args
+}
+
+itcl::body bps::LTEClient::getComponents {} {
+  foreach comp [$_xmlroot selectNodes component] {
+    # determine preset type
+    _createCommand doc root workingModelGetPreset
+    $root setAttribute component [$comp @id]
+    set ret [$_bpsobj _execXml [$doc asXML]]
+    dom parse $ret doc
+    $doc documentElement root
+    if {[info exists _componentObjs([$comp @id])]} continue
+    set preset [$root @preset]
+    if {$preset == ""} {
+      switch [$comp @type] {
+        layer2 {
+          set preset bitblaster
+        }
+        layer3 {
+          set preset routingrobot
+        }
+        clientsim {
+          set preset clientsimpreset
+        }
+        layer4 {
+          set preset sessionsender
+        }
+        security_all {
+          set preset security
+        }
+        playback {
+          set preset recreate
+        }
+        default {
+          set preset [$comp @type]
+        }
+      }
+    }
+    # create an object for it
+    set temp [namespace which [bps::ComponentClient #auto \
+                         $_bpsobj $_context [namespace which $this] \
+                         $preset $preset [$comp @type] $comp]]
+    set _componentObjs([$temp id]) $temp
+  }
+  # one more time for aggstats
+  if {![info exists _componentObjs(aggstats)]} {
+      set compname aggstats
+      set type aggregate_statistics
+      set realname aggstats
+
+      set temp [namespace which [uplevel [list bps::ComponentClient #auto \
+                                               $_bpsobj $_context \
+                                           [namespace which $this] $compname \
+                            $realname $type {}]]]
+      set _componentObjs([$temp id]) $temp
+  }
+  return [array get _componentObjs]
+}
+
+itcl::body bps::LTEClient::getMMEs {} {
+    set ret {}
+    set index 0
+    foreach node [$_xmlroot selectNodes lteLab/mme/child::node()] {
+        lappend ret [$node asText]
+    }
+    return $ret
+}
+
+itcl::body bps::LTEClient::addMME {args} {
+  set optlist {
+      {hostname.arg {} "Hostname or address of the MME"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addMME options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addMME options:"]
+  }
+
+  _createCommand doc root workingModelModify
+  set oldcontrol [$_xmlroot selectNodes lteLab]
+  dom parse [$oldcontrol asXML] cdoc
+  $cdoc documentElement croot
+
+  $croot appendFromScript {
+    domNode::mme {
+        domNode::text $opts(hostname)
+    }
+  }
+  $root appendChild $croot
+  _makeChange $doc
+
+  return [llength [$_xmlroot selectNodes lteLab/mme]]
+}
+
+itcl::body bps::LTEClient::removeMME {index} {
+  _createCommand doc root workingModelModify
+  set oldcontrol [$_xmlroot selectNodes lteLab]
+  dom parse [$oldcontrol asXML] cdoc
+  $cdoc documentElement croot
+
+  set deadnode [$croot selectNodes mme\[$index\]]
+  if {$deadnode == ""} {
+    error "Invalid index $index"
+  }
+  $croot removeChild $deadnode
+
+  $root appendChild $croot
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::LTEClient::_cget {option} {
+  set control [$_xmlroot selectNodes //lteLab]
+  if {$option == "neighborhood"} { set option network }
+  set opts {dut network name}
+  if {[lsearch $opts $option] != -1} {
+  	  return [$_xmlroot @$option ""]
+  } elseif {[lsearch $_optionNames $option] != -1} {
+  	  return [$control @$option ""]
+  }
+  error "Unknown option $option"
+}
+
+itcl::body bps::LTEClient::_doConfigChange {args} {
+  set opts {dut network name}
+  set oldcontrol [$_xmlroot selectNodes lteLab]
+  dom parse [$oldcontrol asXML] cdoc
+  $cdoc documentElement croot
+
+  _createCommand doc root workingModelModify
+  foreach {option value} $args {
+    if {![string match -* $option]} {
+      error "Invalid option $option"
+    }
+    set option [string range $option 1 end]
+    if {$option == "neighborhood"} { set option network }
+    if {[lsearch $opts $option] != -1} {
+      $root setAttribute $option $value
+    } elseif {[lsearch $_optionNames $option] != -1} {
+      $croot setAttribute $option $value
+    } else {
+      error "Unknown option $option"
+    }
+  }
+  $root appendChild $croot
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+
+  return
+}
+
+package provide bps::LTEClient 0.1

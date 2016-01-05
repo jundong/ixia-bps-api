@@ -1,0 +1,203 @@
+itcl::class bps::Result {
+  constructor {result combine} {}
+  destructor {}
+
+  protected variable _data
+  protected variable _combine
+
+  public method delete {}
+
+  public method values {args}
+  public method interfaces {args}
+  public method protocols {args}
+  public method vlans {args}
+  public method get {name args}
+
+  protected method _getSpecs {name interface proto vlan}
+}
+
+itcl::body bps::Result::constructor {result combine} {
+  array set _data $result
+  array set _combine $combine
+}
+
+itcl::body bps::Result::delete {} {
+  itcl::delete object $this
+}
+
+itcl::body bps::Result::values {args} {
+  set optlist {
+    {interface.arg -1 "limit results to given interface"}
+    {protocol.arg {} "limit results to given protocol"}
+    {vlan.arg -1 "limit results to given vlan"}
+  }
+  array set opts [cmdline::getoptions args $optlist "$this values options"]
+
+  foreach {namespec ifspec protospec vlanspec} \
+           [_getSpecs {} $opts(interface) $opts(protocol) $opts(vlan)] break
+
+  set ret {}
+  # scan through each data item looking for ones that are relevant
+  foreach namespec [array names _data -glob \
+                 $namespec\0$ifspec\0$protospec\0$vlanspec] {
+    foreach {name iface proto vlan} [split $namespec \0] break
+    if {[string match *_weight $name]} continue
+    lappend ret $name
+  }
+  return [lsort -unique $ret]
+}
+
+itcl::body bps::Result::interfaces {args} {
+  set optlist {
+    {name.arg {} "limit results to given value"}
+    {protocol.arg {} "limit results to given protocol"}
+    {vlan.arg -1 "limit results to given vlan"}
+  }
+  array set opts [cmdline::getoptions args $optlist "$this values options"]
+
+  foreach {namespec ifspec protospec vlanspec} \
+           [_getSpecs $opts(name) -1 $opts(protocol) $opts(vlan)] break
+
+  set ret {}
+  foreach namespec [array names _data \
+              -glob $namespec\0$ifspec\0$protospec\0$vlanspec] {
+    foreach {name iface proto vlan} [split $namespec \0] break
+    lappend ret $iface
+  }
+  return [lsort -unique $ret]
+}
+
+itcl::body bps::Result::protocols {args} {
+  set optlist {
+    {name.arg {} "limit results to given interface"}
+    {interface.arg -1 "limit results to given interface"}
+    {vlan.arg -1 "limit results to given vlan"}
+  }
+  array set opts [cmdline::getoptions args $optlist "$this values options"]
+
+  foreach {namespec ifspec protospec vlanspec} \
+           [_getSpecs $opts(name) $opts(interface) {} $opts(vlan)] break
+
+  set ret {}
+  foreach namespec [array names _data \
+              -glob $namespec\0$ifspec\0$protospec\0$vlanspec] {
+    foreach {name iface proto vlan} [split $namespec \0] break
+    lappend ret $proto
+  }
+  return [lsort -unique $ret]
+}
+
+itcl::body bps::Result::vlans {args} {
+  set optlist {
+    {name.arg {} "limit results to given interface"}
+    {interface.arg -1 "limit results to given interface"}
+    {protocol.arg {} "limit results to given protocol"}
+  }
+  array set opts [cmdline::getoptions args $optlist "$this values options"]
+
+  foreach {namespec ifspec protospec vlanspec} \
+           [_getSpecs $opts(name) $opts(interface) $opts(protocol) -1] break
+
+  set ret {}
+  foreach namespec [array names _data \
+              -glob $namespec\0$ifspec\0$protospec\0$vlanspec] {
+    foreach {name iface proto vlan} [split $namespec \0] break
+    lappend ret $vlan
+  }
+  return [lsort -unique $ret]
+}
+
+itcl::body bps::Result::get {name args} {
+  set optlist {
+    {interface.arg -1 "limit results to given interface"}
+    {protocol.arg {} "limit results to given protocol"}
+    {vlan.arg -1 "limit results to given vlan"}
+  }
+  array set opts [cmdline::getoptions args $optlist "$this get options"]
+
+  foreach {namespec ifspec protospec vlanspec} \
+           [_getSpecs $name $opts(interface) $opts(protocol) $opts(vlan)] break
+
+  set ret {}
+  set final 0
+  # aggregate all matching values
+  set allvals [array get _data  \
+       $namespec\0$ifspec\0$protospec\0$vlanspec]
+  set count [expr [llength $allvals] / 2]
+  set totalweight 0
+  foreach {namespec value} $allvals {
+    foreach {valname iface proto vlan} [split $namespec \0] break
+    if {[string compare $value ""] != 0} {
+      if {[info exists _combine($name)]} {
+        switch $_combine($name) {
+          average {
+            if {$value == 0} {
+            	set final $value
+            } else {
+                set valstr ${valname}_weight\0$iface\0$proto\0$vlan
+                if {[info exists _data($valstr)] && $_data($valstr) != ""} {
+                  set final [expr $final + 1.0 * $value]
+                  set totalweight [expr $totalweight + $_data($valstr)]
+                } else {
+                  set final [expr $final + 1.0 * $value]
+                  set totalweight [expr $totalweight + 1]
+                }
+            }
+          }
+          null -
+          none -
+          {} {
+            set final $value
+          }
+          max {
+            set final [expr max(wide($final),wide($value))]
+          }
+          min {
+            set final [expr min(wide($final),wide($value))]
+          }
+          default { ;# sum
+            set final [expr wide($final) + wide($value)]
+          }
+        }
+      } else {
+        set final $value
+      }
+    }
+  }
+  # this code carries an assumption that there won't be a mix of weighted &
+  # unweighted values
+  if {$totalweight > 0} {
+    set final [expr $final / $totalweight]
+  }
+  return $final
+}
+
+itcl::body bps::Result::_getSpecs {name interface proto vlan} {
+  if {$name == ""} {
+    set namespec *
+  } else {
+    set namespec $name
+  }
+
+  if {$interface == -1} {
+    set ifspec *
+  } else {
+    set ifspec $interface
+  }
+
+  if {$proto == {}} {
+    set protospec *
+  } else {
+    set protospec $proto
+  }
+
+  if {$vlan == -1} {
+    set vlanspec *
+  } else {
+    set vlanspec $vlan
+  }
+
+  return [list $namespec $ifspec $protospec $vlanspec]
+}
+
+package provide bps::Result 0.1

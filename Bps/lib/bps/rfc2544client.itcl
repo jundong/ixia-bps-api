@@ -1,0 +1,170 @@
+itcl::class bps::RFC2544Client {
+  inherit bps::LabClient
+  lappend bps::LabClient::_subclasses ::bps::RFC2544Client
+
+  constructor {bpsobj args} {
+    LabClient::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  public method save {args}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+
+  protected common _opts {
+    mode
+    binaryRateLower
+    binaryRateUpper
+    binaryResolution
+    stepRateLower
+    stepRateUpper
+    stepRate
+    acceptableFrameLoss
+    acceptableCorruptFrames
+    overallLoad
+    loadApplication
+    loadUnits
+    seriesType
+    customSteps
+    frameSizeMin
+    frameSizeMax
+    frameSizeStart
+    frameSizeEnd
+    frameSizeInterval
+    stepduration
+    stepdurationunits
+    stepdurationApplication
+    packetType
+    payloadWidth
+    payloadType
+    customPayload
+    bidirectional
+    slowStartEnabled
+    maxStreams
+  }
+}
+
+#<control 
+#  mode="binary" 
+#
+#  binaryRateLower="1" 
+#  binaryRateUpper="100"
+#  binaryResolution="10" 
+#
+#  stepRateLower="10" 
+#  stepRateUpper="100"
+#  stepRate="10" 
+#
+#  acceptableFrameLoss="10"
+#  acceptableCorruptFrames="0" 
+#
+#  overallLoad="10000" 
+#  loadApplication="total" 
+#  loadUnits="Meg"
+#
+#  seriesType="custom"
+#
+#  customSteps="64,128,256,512,1024,1280,1518"
+#
+#  frameSizeMin=""
+#  frameSizeMax=""
+#
+#  frameSizeStart=""
+#  frameSizeEnd=""
+#  frameSizeInterval=""
+#
+#  stepduration="30" 
+#  stepdurationunits="seconds"
+#  stepdurationApplication="periteration" 
+#
+#  packetType="Ether"
+#  payloadWidth="eight"
+#  payloadType="zeroes"
+#  customPayload="0"
+#
+#  bidirectional="true"
+#
+#  slowStartEnabled="true"
+#  />
+
+itcl::body bps::RFC2544Client::constructor {
+	  bpsobj args} {
+  _setWorkingModel {RFC2544} \
+                   {RFC 2544 Test Lab}
+  set control [$_xmlroot selectNodes //control]
+  array set _default {}
+  foreach attr [$control attributes] {
+  	if {$attr == "pauseonError"} continue
+    if {[llength $attr] > 1} continue
+  	set _default($attr) [$control @$attr]
+  }
+  set _default(dut) [$_xmlroot @dut]
+  set _default(neighborhood) [$_xmlroot @network]
+  foreach opts $_opts {
+  		if {![info exists _default($opts)]} {
+  				set _default($opts) ""
+  		}
+  }
+
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::RFC2544Client::destructor {} {
+}
+
+itcl::body bps::RFC2544Client::save {args} {
+  eval [list _save {RFC 2544 Test Lab}] $args
+}
+
+itcl::body bps::RFC2544Client::_cget {option} {
+  switch -exact -- $option {
+    dut {return [$_xmlroot @dut]}
+    neighborhood {return [$_xmlroot @network]}
+    default {
+      set control [$_xmlroot selectNodes //control]
+      if [$control hasAttribute $option] {
+  	    return [$control @$option]
+      }
+      if {[lsearch $_opts $option] != -1} {
+      		return ""
+      }
+    }
+  }
+  error "Unknown option $option"
+}
+
+itcl::body bps::RFC2544Client::_doConfigChange {args} {
+  set opts {dut neighborhood}
+  set oldbreakit [$_xmlroot selectNodes //breakit]
+  dom parse [$oldbreakit asXML] cdoc
+  $cdoc documentElement croot
+  set control [$croot selectNodes control]
+
+  _createCommand doc root workingModelModify
+  foreach {option value} $args {
+    if {![string match -* $option]} {
+      error "Invalid option $option"
+    }
+    set option [string range $option 1 end]
+    if {[lsearch $opts $option] != -1} {
+      $root setAttribute $option $value
+    } elseif {[$control hasAttribute $option] 
+              || [lsearch $_opts $option] != -1} {
+      $control setAttribute $option $value
+    } else {
+      error "Unknown option $option"
+    }
+  }
+  $root appendChild $croot
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+
+  return
+}
+
+package provide bps::RFC2544Client 0.1

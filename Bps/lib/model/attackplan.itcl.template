@@ -1,0 +1,35 @@
+package require Itcl
+package require ack
+
+itcl::class %CLASS% {
+  inherit model::AttackPlan
+
+  constructor {args} {}
+  destructor {}
+
+  public variable value
+}
+
+itcl::body %CLASS%::constructor {args} {
+  set _type attackplan
+  # need to put component and model in place first
+  foreach arg {component model} {
+    set cfgix [lsearch $args -$arg]
+    if {$cfgix != -1 && ($cfgix % 2) == 0 && ([llength $args] % 2) == 0} {
+      eval [list configure -$arg [lindex $args [expr $cfgix + 1]]]
+    }
+  }
+  configure -value default
+  eval configure $args
+  if {![info exists value]} {
+    error "value must be specified" {} RUNTIME_ERROR
+  }
+}
+
+itcl::body %CLASS%::destructor {} {
+}
+
+itcl::configbody %CLASS%::value {
+}
+
+log::log warn "attackplan %CLASS% declared"

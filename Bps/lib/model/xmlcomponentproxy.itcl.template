@@ -1,0 +1,49 @@
+package require Itcl
+
+itcl::class %CLASS% {
+  inherit model::%COMMTYPE%
+
+  public variable value
+
+  constructor {args} {}
+  destructor {}
+
+  public proc members {}
+  public proc outputs {}
+  public method bulkdata {}
+}
+
+itcl::body %CLASS%::constructor {args} {
+  set _type xmlcomponentproxy
+  configure %DEFAULTS%
+  eval configure $args
+  if {![info exists value]} {
+    error "value must be specified" {} RUNTIME_ERROR
+  }
+  set _parameters [namespace which [%PARAMSTRUCT% #auto -value $value \
+                          -component [namespace which $this] -model $model]]
+}
+
+itcl::body %CLASS%::destructor {} {
+  if {[info exists _parameters]} {
+    catch {itcl::delete object $_parameters}
+  }
+}
+
+itcl::configbody %CLASS%::value {
+  if {[info exists _parameters]} {
+    $_parameters configure -value $value
+  }
+}
+
+itcl::body %CLASS%::members {} {
+  return [%PARAMSTRUCT%::members]
+}
+
+itcl::body %CLASS%::outputs {} {
+  return [list %OUTPUTS%]
+}
+
+itcl::body %CLASS%::bulkdata {} {
+  return [list %BULKS%]
+}

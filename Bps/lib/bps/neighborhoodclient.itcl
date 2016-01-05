@@ -1,0 +1,1848 @@
+itcl::class bps::NeighborhoodClient {
+  inherit bps::Client
+
+  constructor {bpsobj template args} {
+    Client::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _construction 0
+  protected variable _xmldoc
+  protected variable _xmlroot
+
+  public method getVlanEtherType {interface}
+  public method setVlanEtherType {interface value}
+  public method domainNames {{interface {}}}
+  public method addDomain {interface name}
+  public method removeDomain {interface name}
+
+  public method getSubnets {interface domain}
+  public method addSubnet {interface domain subnet}
+  public method removeSubnet {interface domain 
+                              {innervlan {}} {outervlan {}}}
+
+  public method addHostRange {interface domain args}
+  public method removeHostRange {interface domain 
+                              {innervlan {}} {outervlan {}}}
+
+  public method addDHCPClients {interface domain args}
+  public method removeDHCPClients {interface domain 
+                              {innervlan {}} {outervlan {}}}
+
+  public method getDHCPServer {interface domain
+                              {innervlan {}} {outervlan {}}}
+  public method setDHCPServer {interface domain args}
+
+  public method addSGSNClients {interface domain args}
+  public method addSGSN {interface domain args}
+  public method removeSGSN {interface domain args}
+  public method removeSGSNClients {interface domain 
+                              {innervlan {}} {outervlan {}}}
+
+  public method addGGSN {interface domain args}
+  public method removeGGSN {interface domain 
+                              {innervlan {}} {outervlan {}}}
+
+  public method addENodeBClients {interface domain args}
+  public method addENodeB {interface domain args}
+  public method removeENodeB {interface domain args}
+  public method removeENodeBClients {interface domain 
+                              {innervlan {}} {outervlan {}}}
+
+  public method addMMEClients {interface domain args}
+  public method addMME {interface domain args}
+  public method removeMME {interface domain args}
+  public method removeMMEClients {interface domain 
+                              {innervlan {}} {outervlan {}}}
+  public method addSGWClients {interface domain args}
+  public method removeSGWClients {interface domain 
+                              {innervlan {}} {outervlan {}}}
+
+  public method getPaths {}
+  public method addPath {sourceinterface sourcedomain sourcevlan 
+                         destinterface destdomain destvlan}
+  public method removePath {sourceinterface sourcedomain sourcevlan 
+                         destinterface destdomain destvlan}
+
+  public method getFilters {}
+  public method setFilter {interface args}
+  public method removeFilter {interface}
+
+  public method getImpairments {}
+  public method addImpairment {interface args}
+  public method removeImpairment {interface}
+
+  public method save {args}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+  protected method _updateXML {args}
+  protected method _walkDomains {domainvar interface script}
+  protected method _findSubnet {docvar interface domain
+                              {innervlan {}} {outervlan {}}}
+  protected method _createCommand {docvar rootvar command}
+  protected method _makeChange {domdoc}
+
+  public method _getXML {} { return [$_xmlroot asXML] }
+}
+
+itcl::body bps::NeighborhoodClient::constructor {
+	  bpsobj template args} {
+  _createCommand doc root setWorkingNeighborhood 
+  if {[string compare $template ""] != 0} {
+    $root setAttribute template $template
+  }
+
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  set _construction 1
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+
+  set name [namespace tail $this]
+  $_bpsobj _exec [list workingNeighborhoodModify -instance $_context \
+                     -name $name]
+  array set _default [list name $name]
+
+  configure -name $name
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  set _construction 2
+  return
+}
+
+itcl::body bps::NeighborhoodClient::destructor {} {
+  if {$_construction >= 1} {
+    catch {$_bpsobj _exec "workingNeighborhoodForget -instance $_context"}
+  }
+}
+
+itcl::body bps::NeighborhoodClient::getVlanEtherType {interface} {
+  set tpidnode [$_xmlroot selectNodes "tpid\[@interface=$interface\]"]
+  if {$tpidnode == ""} {
+    return 8100
+  }
+  return [$tpidnode text]
+}
+
+itcl::body bps::NeighborhoodClient::setVlanEtherType {interface value} {
+  _createCommand doc root workingNeighborhoodModify
+  $root appendFromScript {
+    domNode::tpid -interface $interface {
+      domNode::text $value
+    }
+  }
+
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::domainNames {{interface {}}} {
+  if {$interface == {}} {
+    set ret {}
+    foreach attr [lsort -index 1 -integer -unique \
+            [$_xmlroot selectNodes domain/@interface]] {
+      set ii [lindex $attr 1]
+      set ifd {}
+      _walkDomains domain $ii {
+        lappend ifd [$domain @name]
+      }
+      lappend ret $ii $ifd
+    }
+    set ifd {}
+    _walkDomains domain external {
+      lappend ifd [$domain @name]
+    }
+    if {$ifd != ""} {
+      lappend ret external $ifd
+    }
+    return $ret
+  } else {
+    set ret {}
+    _walkDomains domain $interface {
+      lappend ret [$domain @name]
+    }
+    return $ret
+  }
+}
+
+itcl::body bps::NeighborhoodClient::addDomain {interface name} {
+  _createCommand doc root workingNeighborhoodAddDomain 
+  $root setAttribute iface $interface
+  $root setAttribute domain $name
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeDomain {interface name} {
+  _createCommand doc root workingNeighborhoodRemoveDomain 
+  $root setAttribute iface $interface
+  $root setAttribute domain $name
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::getSubnets {interface name} {
+  _createCommand doc root getWorkingNeighborhoodDomain 
+  $root setAttribute iface $interface
+  $root setAttribute domain $name
+  $root setAttribute limit 0xffff
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+  set netlist {}
+  foreach subnet [$root selectNodes subnet] {
+    set ranges {}
+    foreach range [$subnet selectNodes range] {
+      set min [$range @min]
+      set max [$range @max $min]
+      if {$max == ""} { set max $min }
+      lappend ranges $min $max
+    }
+                      
+    set type [$subnet @type]
+    set item [list type $type]
+    if {[string compare $interface "external"] == 0} {
+      lappend item ip_v [$subnet @ip_v ""] \
+                   behind_snapt [$subnet @behind_snapt false] \
+                   ranges $ranges \
+                   innervlan [$subnet @innervlan ""] \
+                   outervlan [$subnet @outervlan ""]
+    } else {
+      switch $type {
+        "dhcp_client" {
+          foreach {attr default} {
+            l2 ""
+            ip_v ""
+            innervlan ""
+            outervlan ""
+            dns_server ""
+            domain_name ""
+            behind_snapt false
+
+            alloc_rate ""
+            enable_stats ""
+          } {
+            lappend item $attr [$subnet @$attr ""]
+          }
+          lappend item behind_snapt [$subnet @behind_snapt false] \
+                       innervlan [$subnet @innervlan ""] \
+                       outervlan [$subnet @outervlan ""] \
+                       alloc_rate [$subnet @alloc_rate ""] \
+                       enable_stats [$subnet @enable_stats ""]
+
+          set dhn [$subnet selectNodes dynamic_hosts]
+          if {$dhn != ""} {
+              lappend item count [$dhn @num 0]
+          }
+          set dcn [$subnet selectNodes dhcp_client]
+          if {$dcn != ""} {
+              lappend item accept_external_servers [expr ![$dcn @only_accept_local_servers true]]
+          }
+       }
+       "gtp_sgsn" {
+          foreach {attr default} {
+            l2 ""
+            ip_v ""
+            innervlan ""
+            outervlan ""
+            dns_server ""
+            domain_name ""
+            behind_snapt false
+
+            alloc_rate ""
+            enable_stats ""
+          } {
+            lappend item $attr [$subnet @$attr ""]
+          }
+          set dhn [$subnet selectNodes dynamic_hosts]
+          if {$dhn != ""} {
+              lappend item count [$dhn @num 0]
+          }
+          foreach dhn [$subnet selectNodes gtp_sgsn] {
+              set details {}
+              foreach opt {
+                local remote
+              } {
+                  lappend details $opt [$dhn @$opt ""]
+              }
+              lappend item sgsn[incr count] $details
+          }
+          set dhn [$subnet selectNodes gtp_sgsn_ue]
+          if {$dhn != ""} {
+              foreach opt {
+                imsi_base msisdn_base qos
+              } {
+                  lappend item $opt [$dhn @$opt ""]
+              }
+              set ap [$dhn selectNodes access_point]
+              if {$ap != ""} {
+                  foreach {opt name} {
+                    name access_point_name
+                    username username
+                    password password
+                  } {
+                      lappend item $name [$ap @$opt ""]
+                  }
+              }
+          }
+       }
+       "gtp_ggsn" {
+          foreach {attr default} {
+            l2 ""
+            netaddr ""
+            netmask ""
+            gateway ""
+            ip_v ""
+            innervlan ""
+            outervlan ""
+            dns_server ""
+            domain_name ""
+            behind_snapt false
+
+            enable_stats ""
+          } {
+            lappend item $attr [$subnet @$attr ""]
+          }
+          lappend item ranges $ranges
+          set dhn [$subnet selectNodes dynamic_hosts]
+          if {$dhn != ""} {
+              lappend item count [$dhn @num 0]
+          }
+          set dhn [$subnet selectNodes gtp_ggsn]
+          if {$dhn != ""} {
+              foreach opt {
+                local qos
+              } {
+                  lappend item $opt [$dhn @$opt ""]
+              }
+              set ap [$dhn selectNodes range]
+              if {$ap != ""} {
+                  foreach {opt name} {
+                    min client_min
+                    max client_max
+                  } {
+                      lappend item $name [$ap @$opt ""]
+                  }
+              }
+          }
+          if {[$subnet @gateway ""] != ""} {
+            lappend item gateway [$subnet @gateway ""]
+          }
+       }
+        "lte_enodeb" {
+          foreach {attr default} {
+            l2 ""
+            netaddr ""
+            netmask ""
+            gateway ""
+            ip_v ""
+            innervlan ""
+            outervlan ""
+            dns_server ""
+            domain_name ""
+            behind_snapt false
+
+            alloc_rate ""
+            enable_stats ""
+          } {
+            lappend item $attr [$subnet @$attr ""]
+          }
+
+          set dhn [$subnet selectNodes dynamic_hosts]
+          if {$dhn != ""} {
+              lappend item count [$dhn @num 0]
+          }
+          set count 0
+          foreach dhn [$subnet selectNodes lte_enodeb] {
+              set details {}
+              foreach opt {
+                local mme
+              } {
+                  lappend details $opt [$dhn @$opt ""]
+              }
+              lappend item enodeb[incr count] $details
+          }
+          set dhn [$subnet selectNodes plmn]
+          if {$dhn != ""} {
+              foreach opt {
+                mcc mnc
+              } {
+                  lappend item $opt [$dhn @$opt ""]
+              }
+          }
+          set dhn [$subnet selectNodes lte_enodeb_ue]
+          if {$dhn != ""} {
+              foreach opt {
+                num_dedicated_bearers imsi_base msisdn_base qos 
+                secret_key secret_key_step operator_variant
+                mobility_action mobility_interval_ms
+              } {
+                  lappend item $opt [$dhn @$opt ""]
+              }
+              set ap [$dhn selectNodes access_point]
+              if {$ap != ""} {
+                  foreach {opt name} {
+                    name access_point_name
+                    username username
+                    password password
+                  } {
+                      lappend item $name [$ap @$opt ""]
+                  }
+              }
+              set b [$dhn selectNodes bearers/bearer]
+              set qci {}
+              foreach bearer $b {
+                  lappend qci [$bearer @qci_label ""]
+              }
+              lappend item qci_labels $qci
+          }
+        }
+        "lte_enodeb_mme" {
+          foreach {attr default} {
+            l2 ""
+            netaddr ""
+            netmask ""
+            gateway ""
+            ip_v ""
+            innervlan ""
+            outervlan ""
+            dns_server ""
+            domain_name ""
+            behind_snapt false
+
+            alloc_rate ""
+            enable_stats ""
+          } {
+            lappend item $attr [$subnet @$attr ""]
+          }
+
+          set count 0
+          foreach dhn [$subnet selectNodes lte_mme] {
+              set details {}
+              foreach opt {
+                local sgw pgw
+              } {
+                  lappend details $opt [$dhn @$opt ""]
+              }
+              lappend item mme[incr count] $details
+              set subcount 0
+              foreach enb [$dhn selectNodes lte_enodeb] {
+                  set subdetails {}
+                  foreach opt {
+                    local
+                  } {
+                      lappend subdetails $opt [$enb @$opt ""]
+                  }
+                  dict set item mme$count enodeb[incr subcount] $subdetails
+              }
+          }
+          set dhn [$subnet selectNodes plmn]
+          if {$dhn != ""} {
+              foreach opt {
+                mcc mnc
+              } {
+                  lappend item $opt [$dhn @$opt ""]
+              }
+          }
+          set dhn [$subnet selectNodes lte_enodeb_ue]
+          if {$dhn != ""} {
+              foreach opt {
+                num_dedicated_bearers imsi_base msisdn_base qos
+                mobility_action mobility_interval_ms
+              } {
+                  lappend item $opt [$dhn @$opt ""]
+              }
+              set ap [$dhn selectNodes access_point]
+              if {$ap != ""} {
+                  foreach {opt name} {
+                    name access_point_name
+                    username username
+                    password password
+                  } {
+                      lappend item $name [$ap @$opt ""]
+                  }
+              }
+              set b [$dhn selectNodes bearers/bearer]
+              set qci {}
+              foreach bearer $b {
+                  lappend qci [$bearer @qci_label ""]
+              }
+              lappend item qci_labels $qci
+          }
+          set ap [$subnet selectNodes range]
+          if {$ap != ""} {
+              foreach opt {
+                min max
+              } {
+                  lappend item $opt [$ap @$opt ""]
+              }
+          }
+        }
+        "lte_sgw_pgw" {
+          foreach {attr default} {
+            l2 ""
+            netaddr ""
+            netmask ""
+            gateway ""
+            ip_v ""
+            innervlan ""
+            outervlan ""
+            dns_server ""
+            domain_name ""
+            behind_snapt false
+
+            enable_stats ""
+          } {
+            lappend item $attr [$subnet @$attr ""]
+          }
+          set dhn [$subnet selectNodes dynamic_hosts]
+          if {$dhn != ""} {
+              lappend item count [$dhn @num 0]
+          }
+          set count 0
+          foreach dhn [$subnet selectNodes lte_sgw] {
+              set details {}
+              foreach opt {
+                local max_tunnels
+              } {
+                  lappend details $opt [$dhn @$opt ""]
+              }
+              lappend item sgw[incr count] $details
+          }
+          lappend item dns_server [$subnet @dns_server ""]
+          lappend item domain_name [$subnet @domain_name ""]
+          set ap [$subnet selectNodes range]
+          if {$ap != ""} {
+              foreach opt {
+                min max
+              } {
+                  lappend item $opt [$ap @$opt ""]
+              }
+          }
+        }
+       default {
+           lappend item \
+             netaddr [$subnet @netaddr ""] \
+             behind_snapt [$subnet @behind_snapt false] \
+             ip_v [$subnet @ip_v] \
+             ranges $ranges \
+             innervlan [$subnet @innervlan ""] \
+             outervlan [$subnet @outervlan ""] \
+             dns_server [$subnet @dns_server ""] \
+             domain_name [$subnet @domain_name ""] \
+             enable_stats [$subnet @enable_stats ""]
+           lappend item netmask [$subnet @prefix [$subnet @netmask ""]]
+           if {[$subnet @l2 ""] != ""} {
+     	     lappend item l2 [$subnet @l2 ""]
+           }
+           if {[string compare $type "router"] == 0} {
+             lappend item router_ip [$subnet @router_ip ""]
+           }
+           if {[$subnet @gateway ""] != ""} {
+             lappend item gateway [$subnet @gateway ""]
+           }
+           set sixrd [$subnet selectNodes sixrd]
+           if {$sixrd != ""} {
+            lappend item sixrd [list \
+                prefix [$sixrd @prefix ""] \
+                prefix_len [$sixrd @prefix_len ""] \
+                ip4_mask_len [$sixrd @ip4_mask_len ""] \
+                border_relay [$sixrd @border_relay ""] \
+                hosts_per_ce [$sixrd @hosts_per_ce ""] \
+            ]
+           }
+        }
+      }
+    }
+    lappend netlist $item
+  }
+  return $netlist
+}
+
+itcl::body bps::NeighborhoodClient::addSubnet {interface name subnet} {
+  _createCommand doc root workingNeighborhoodAddSubnets
+  $root setAttribute iface $interface
+  $root setAttribute domain $name
+  $root appendFromScript {
+    set ranges {}
+    if {[dict exists $subnet ranges]} {
+      set ranges [dict get $subnet ranges]
+    }
+    dict unset subnet ranges
+    if {[llength [lindex $ranges 0]] > 1} {
+    		# the first element must be a type - this must be the old format
+    		# convert it first
+    		set deprecated $ranges
+    		set ranges {}
+    		foreach range $deprecated {
+    				lassign $range type min max l2 router_ip
+    		}
+    		foreach attr {type l2 router_ip} {
+    				dict set subnet $attr [set $attr]
+    		}
+    		lappend ranges $min $max
+    		dict set subnet ip_v 4
+
+    		if {$interface == "external"} {
+    				# remove unsupported attributes
+    				dict for {key val} $subnet {
+    						if {[lsearch {ip_v behind_snapt ranges} $key] == -1} {
+    								dict unset subnet $key
+    						}
+    				}
+    				# behind_snapt was unsupported at the time, set it to default
+    				dict set subnet behind_snapt false
+    		}
+    }
+    set attrs {}
+    foreach {key val} $subnet {
+      lappend attrs $key $val
+    }
+    if {$interface == "external"} {
+    		dict set attrs type external
+    }
+    if {![dict exists $attrs ip_v]} {
+    		dict set attrs ip_v 4
+    }
+    if {![dict exists $attrs behind_snapt]} {
+    		dict set attrs behind_snapt false
+    }
+    eval domNode::subnet $attrs [list {
+      foreach {min max} $ranges {
+        if {$max == ""} {
+        		set max $min
+        }
+        domNode::range -min $min -max $max
+      }
+    }]
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeSubnet {interface name 
+                                          {innervlan {}} {outervlan {}}} {
+  _createCommand doc root workingNeighborhoodRemoveSubnets
+  $root setAttribute iface $interface
+  $root setAttribute domain $name
+  $root appendFromScript {
+    domNode::subnet -innervlan $innervlan -outervlan $outervlan
+  }
+  _makeChange $doc
+  return
+}
+
+# Provide a simpler (or really, more helpful) API for adding a normal host range
+# subnet
+itcl::body bps::NeighborhoodClient::addHostRange {interface domain args} {
+  set optlist {
+      {ip_v.arg 4 "IP version"}
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+      {dns_server.arg {} "default DNS Server"}
+      {domain_name.arg {} "default DNS search domain"}
+      {behind_snapt.arg {} "Clients will undergo source address or port translation"}
+      {enable_stats "Enable per-host stats tracking on this subnet"}
+
+      {l2.arg {02:1a:c5:01:00:00} "Base ethernet address for hosts"}
+      {netaddr.arg {} "Network address"}
+      {netmask.arg {} "Network mask"}
+      {gateway.arg {} "Gateway address"}
+
+      {min.arg {} "Minimum IP Address"}
+      {max.arg {} "Maximum IP Address"}
+
+      {virtual_router "Enable virtual router mode"}
+      {router_ip.arg {} "Virtual router address"}
+
+      {sixrd "enable 6RD"}
+      {sixrd_prefix.arg {} "Prefix for 6RD"}
+      {sixrd_prefix_len.arg {} "Prefix length for 6RD"}
+      {sixrd_ip4_mask_len.arg {} "IPv4 mask length for 6RD"}
+      {sixrd_border_relay.arg {} "Border relay for 6RD"}
+      {sixrd_hosts_per_ce.arg {} "Hosts per CE for 6RD"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addHostRange options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addHostRange options:"]
+  }
+  _createCommand doc root workingNeighborhoodAddSubnets
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  set subnetattrs {}
+  if {$interface == "external"} {
+    set optlist {
+        ip_v
+        behind_snapt
+    }
+    lappend subnetattrs type external
+  } else {
+    set optlist {
+        ip_v
+        innervlan outervlan
+        dns_server domain_name
+        behind_snapt
+        l2
+        netaddr netmask gateway
+        router_ip
+        enable_stats
+    }
+    if {$opts(virtual_router)} {
+      lappend subnetattrs type router
+    } else {
+      lappend subnetattrs type hosts
+    }
+  }
+  foreach opt $optlist {
+      if { $opts($opt) != ""} {
+        lappend subnetattrs -$opt $opts($opt)
+      }
+  }
+  $root appendFromScript {
+    eval domNode::subnet $subnetattrs [list {
+      domNode::range -min $opts(min) \
+                     -max $opts(max)
+      if {$opts(sixrd)} {
+        domNode::sixrd -prefix $opts(sixrd_prefix) \
+                       -prefix_len $opts(sixrd_prefix_len) \
+                       -ip4_mask_len $opts(sixrd_ip4_mask_len) \
+                       -border_relay $opts(sixrd_border_relay) \
+                       -hosts_per_ce $opts(sixrd_hosts_per_ce)
+      }
+    }]
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeHostRange {interface domain 
+                                  {innervlan {}} {outervlan {}}} {
+    removeSubnet $interface $domain $innervlan $outervlan
+}
+
+itcl::body bps::NeighborhoodClient::addDHCPClients {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+      {l2.arg {02:1a:c5:01:00:00} "Base ethernet address for hosts"}
+      {count.arg 25 "Number of allocated hosts"}
+      {alloc_rate.arg {} "Rate hosts are allocated / deallocated"}
+      {accept_external_servers "Accept responses from 3rd party DHCP servers"}
+      {dns_server.arg {} "default DNS Server"}
+      {domain_name.arg {} "default DNS search domain"}
+      {behind_snapt.arg {} "Clients will undergo source address or port translation"}
+      {enable_stats "Enable per-host stats tracking on this subnet"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addDHCPClients options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addDHCPClients options:"]
+  }
+  _createCommand doc root workingNeighborhoodAddSubnets
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  set subnetattrs {}
+  if { $opts(innervlan) != ""} {
+    lappend subnetattrs -innervlan $opts(innervlan)
+  }
+  if { $opts(outervlan) != ""} {
+    lappend subnetattrs -outervlan $opts(outervlan)
+  }
+  if { $opts(dns_server) != ""} {
+    lappend subnetattrs -dns_server $opts(dns_server)
+  }
+  if { $opts(domain_name) != ""} {
+    lappend subnetattrs -domain_name $opts(domain_name)
+  }
+  if { $opts(behind_snapt) != ""} {
+    lappend subnetattrs -behind_snapt $opts(behind_snapt)
+  }
+  if { $opts(alloc_rate) != ""} {
+    lappend subnetattrs -alloc_rate $opts(alloc_rate)
+  }
+  lappend subnetattrs -enable_stats $opts(enable_stats)
+  $root appendFromScript {
+    eval [list domNode::subnet -ip_v 4 \
+                    -l2 $opts(l2) \
+                    -type dhcp_client] \
+                    $subnetattrs [list {
+      domNode::dynamic_hosts -id 0 -num $opts(count)
+      domNode::dhcp_client -only_accept_local_servers \
+                    [expr !$opts(accept_external_servers)]
+    }]
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeDHCPClients {interface domain 
+                                          {innervlan {}} {outervlan {}}} {
+    removeSubnet $interface $domain $innervlan $outervlan
+}
+
+itcl::body bps::NeighborhoodClient::getDHCPServer {interface domain
+                                          {innervlan {}} {outervlan {}}} {
+  set subnetnode [_findSubnet qdoc $interface $domain $innervlan $outervlan]
+  set dhn [$subnetnode selectNodes dhcp_server]
+  if {$dhn == ""} {
+    return [list disabled true]
+  }
+  set ret [list disabled false \
+               server_ip [$dhn @server_ip ""] \
+               lease_time [$dhn @lease_time ""] \
+               accept_external_clients [expr ![$dhn \
+                                       @only_accept_local_clients true] ] ]
+  foreach range [$dhn selectNodes range] {
+    lappend ret min [$range @min ""] max [$range @max ""]
+  }
+  return $ret
+}
+
+itcl::body bps::NeighborhoodClient::setDHCPServer {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+      {disabled "Disable DHCP server for this subnet"}
+      {accept_external_clients "Accept requests from 3rd party DHCP clients"}
+      {server_ip.arg {} "IP of DHCP server"}
+      {lease_time.arg 3600 "DHCP lease time"}
+      {min.arg {} "Minimum DHCP address"}
+      {max.arg {} "Maximum DHCP address"}
+  }
+  array set opts [cmdline::getoptions args $optlist "setDHCPServer options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "setDHCPServer options:"]
+  }
+
+  # First of all, we need to find the subnet that will get a new dhcp server
+  set subnetnode [_findSubnet qdoc $interface $domain $opts(innervlan) $opts(outervlan)]
+
+  _createCommand doc root workingNeighborhoodModifySubnet
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  set dsn [$subnetnode selectNodes dhcp_server]
+  if {$opts(disabled)} {
+      if {$dsn != ""} {
+          $subnetnode removeChild $dsn
+      }
+  } else {
+      if {$dsn != ""} {
+         foreach opt {
+                server_ip lease_time} {
+            $dsn setAttribute $opt $opts($opt)
+         }
+         $dsn setAttribute only_accept_local_clients \
+                           [expr !$opts(accept_external_clients)]
+         foreach rn [$dsn selectNodes range] {
+            $dsn removeChild $rn
+         }
+         $dsn appendFromScript {
+             domNode::range -min $opts(min) -max $opts(max)
+         }
+     } else {
+        $subnetnode appendFromScript {
+            domNode::dhcp_server -server_ip $opts(server_ip) \
+                                 -lease_time $opts(lease_time) \
+                                 -only_accept_local_clients \
+                                    [expr !$opts(accept_external_clients)] {
+              domNode::range -min $opts(min) -max $opts(max)
+            }
+        }
+     }
+  }
+  $root appendChild $subnetnode
+  _makeChange $doc
+  return
+}
+
+# Add a group of clients for a SGSN (setting up the SGSN itself is an implicit
+# part of this. FYI SGSN is a Telecom 3G component)
+# Note that SGSNs must live in an IPv4 network.
+itcl::body bps::NeighborhoodClient::addSGSNClients {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+      {dns_server.arg {} "default DNS Server"}
+      {domain_name.arg {} "default DNS search domain"}
+      {behind_snapt.arg {} "Clients will undergo source address or port translation"}
+      {enable_stats "Enable per-host stats tracking on this subnet"}
+
+      {l2.arg {02:1a:c5:01:00:00} "Base ethernet address for hosts"}
+      {netaddr.arg {} "Network address"}
+      {netmask.arg {} "Network mask"}
+      {gateway.arg {} "Gateway address"}
+
+      {local.arg {} "SGSN address"}
+      {remote.arg {} "GGSN this SGSN will connect to"}
+
+      {count.arg 25 "Number of allocated clients"}
+      {alloc_rate.arg {} "Rate clients are allocated"}
+      {imsi_base.arg {} "Starting value for IMSI"}
+      {msisdn_base.arg {} "Starting value for IMSI"}
+      {qos.arg {} "QoS setting"}
+
+      {access_point_name.arg {} "Access Point name"}
+      {username.arg {} "username"}
+      {password.arg {} "password"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addSGSNClients options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addSGSNClients options:"]
+  }
+  _createCommand doc root workingNeighborhoodAddSubnets
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  set subnetattrs {}
+  foreach opt {
+    innervlan outervlan
+    dns_server domain_name
+    behind_snapt
+    l2
+    netaddr netmask gateway
+    alloc_rate
+    enable_stats
+  } {
+      if { $opts($opt) != ""} {
+        lappend subnetattrs -$opt $opts($opt)
+      }
+  }
+  $root appendFromScript {
+    eval [list domNode::subnet -ip_v 4 \
+                    -type gtp_sgsn] \
+                    $subnetattrs [list {
+      domNode::gtp_sgsn -local $opts(local) \
+                        -remote $opts(remote)
+      domNode::gtp_sgsn_ue \
+                    -imsi_base $opts(imsi_base) \
+                    -msisdn_base $opts(msisdn_base) \
+                    -qos $opts(qos) {
+          domNode::access_point \
+                    -name $opts(access_point_name) \
+                    -username $opts(username) \
+                    -password $opts(password) \
+      }
+      domNode::dynamic_hosts -id 0 \
+                    -num $opts(count)
+    }]
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::addSGSN {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+
+      {local.arg {} "SGSN address"}
+      {remote.arg {} "GGSN this SGSN will connect to"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addSGSN options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addSGSN options:"]
+  }
+
+  # First of all, we need to find the subnet that will get a new SGSN
+  set subnetnode [_findSubnet qdoc $interface $domain $opts(innervlan) $opts(outervlan)]
+  if {[$subnetnode @type ""] != "gtp_sgsn"} {
+    error "Selected subnet is not a SGSN subnet"
+  }
+  $subnetnode appendFromScript {
+      domNode::gtp_sgsn -local $opts(local) \
+                        -remote $opts(remote)
+  }
+
+  _createCommand doc root workingNeighborhoodModifySubnet
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  $root appendChild $subnetnode
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeSGSN {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+
+      {local.arg {} "SGSN address"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addSGSN options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addSGSN options:"]
+  }
+
+  # First of all, we need to find the subnet that will get a new SGSN
+  set subnetnode [_findSubnet qdoc $interface $domain $opts(innervlan) $opts(outervlan)]
+  if {[$subnetnode @type ""] != "gtp_sgsn"} {
+    error "Selected subnet is not a SGSN subnet"
+  }
+  set sgsnnode [$subnetnode selectNodes "gtp_sgsn\[@local='$opts(local)'\]\[1\]"]
+  if {$sgsnnode == ""} {
+    error "SGSN $opts(local) not found"
+  }
+  $subnetnode removeChild $sgsnnode
+
+  _createCommand doc root workingNeighborhoodModifySubnet
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  $root appendChild $subnetnode
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeSGSNClients {interface domain 
+                                  {innervlan {}} {outervlan {}}} {
+    removeSubnet $interface $domain $innervlan $outervlan
+}
+
+itcl::body bps::NeighborhoodClient::addGGSN {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+      {dns_server.arg {} "default DNS Server"}
+      {domain_name.arg {} "default DNS search domain"}
+      {behind_snapt.arg {} "Clients will undergo source address or port translation"}
+      {enable_stats "Enable per-host stats tracking on this subnet"}
+
+      {l2.arg {02:1a:c5:01:00:00} "Ethernet address for GGSN"}
+      {netaddr.arg {} "Network address"}
+      {netmask.arg {} "Network mask"}
+      {gateway.arg {} "Gateway address"}
+
+      {min.arg {} "Minimum IP Address"}
+      {max.arg {} "Maximum IP Address"}
+
+      {local.arg {} "IP of GGSN"}
+      {qos.arg {} "QoS value"}
+      {client_min.arg {} "Minimum address assignment for clients"}
+      {client_max.arg {} "Maximum address assignment for clients"}
+  }
+  array set opts [cmdline::getoptions args $optlist "setGGSN options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "setGGSN options:"]
+  }
+
+  _createCommand doc root workingNeighborhoodAddSubnets
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  set subnetattrs {}
+  if {$interface == "external"} {
+    error "GGSN is unsupported on external interfaces"
+  }
+  set optlist {
+        innervlan outervlan
+        dns_server domain_name
+        behind_snapt
+        l2
+        netaddr netmask gateway
+        enable_stats
+  }
+  foreach opt $optlist {
+      if { $opts($opt) != ""} {
+        lappend subnetattrs -$opt $opts($opt)
+      }
+  }
+  $root appendFromScript {
+    eval [list domNode::subnet -ip_v 4 \
+                    -type gtp_ggsn] \
+                    $subnetattrs [list {
+      domNode::range -min $opts(min) \
+                     -max $opts(max)
+      domNode::gtp_ggsn -local $opts(local) \
+                        -qos $opts(qos) {
+          domNode::range -min $opts(client_min) -max $opts(client_max)
+      }
+    }]
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeGGSN {interface domain 
+                                  {innervlan {}} {outervlan {}}} {
+    removeSubnet $interface $domain $innervlan $outervlan
+}
+
+# Add a group of clients for an LTE eNodeB (setting up the eNodeB itself is an
+# implicit part of this.)
+itcl::body bps::NeighborhoodClient::addENodeBClients {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+      {dns_server.arg {} "default DNS Server"}
+      {domain_name.arg {} "default DNS search domain"}
+      {behind_snapt.arg {} "Clients will undergo source address or port translation"}
+      {enable_stats "Enable per-host stats tracking on this subnet"}
+
+      {l2.arg {02:1a:c5:01:00:00} "Base ethernet address for hosts"}
+      {netaddr.arg {} "Network address"}
+      {netmask.arg {} "Network mask"}
+      {gateway.arg {} "Gateway address"}
+
+      {local.arg {} "eNodeB address"}
+      {mme.arg {} "MME this eNodeB will connect to"}
+      {sctp_over_udp.arg false "Use SCTP over UDP rather than directly over IP"}
+      {sctp_sport.arg {} "Specified SCTP source port"}
+
+      {count.arg 25 "Number of allocated clients"}
+      {alloc_rate.arg {} "Rate clients are allocated"}
+      {num_dedicated_bearers.arg 0 "Number of dedicated bearers to create per UE"}
+      {qci_labels.arg {} "QCI Labels to use on each bearer, starting with default"}
+      {imsi_base.arg {} "Starting value for IMSI"}
+      {msisdn_base.arg {} "Starting value for IMSI"}
+      {qos.arg {} "QoS setting"}
+      {secret_key.arg {} "Starting secret key"}
+      {secret_key_step.arg {0} "Secret key step"}
+      {operator_variant.arg {} "Operator variant for use with secret key"}
+      {mobility_action.arg {} "Either \"none\" or \"toggle_idle\""}
+      {mobility_interval_ms.arg {} "Interval for the mobility action, in milliseconds"}
+
+      {access_point_name.arg {} "Access Point name"}
+      {username.arg {} "username"}
+      {password.arg {} "password"}
+      
+      {mcc.arg {} "PLMN MCC"}
+      {mnc.arg {} "PLMN MNC"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addENodeBClients options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addENodeBClients options:"]
+  }
+  _createCommand doc root workingNeighborhoodAddSubnets
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  set subnetattrs {}
+  foreach opt {
+    innervlan outervlan
+    dns_server domain_name
+    behind_snapt
+    l2
+    netaddr netmask gateway
+    alloc_rate
+    enable_stats
+  } {
+      if { $opts($opt) != ""} {
+        lappend subnetattrs -$opt $opts($opt)
+      }
+  }
+  set sctpport {}
+  if {$opts(sctp_sport) != ""} {
+    set sctpport [list -sctp_sport $opts(sctp_sport)]
+  }
+  $root appendFromScript {
+    eval [list domNode::subnet -ip_v 4 \
+                    -type lte_enodeb] \
+                    $subnetattrs [list {
+      domNode::plmn -mcc $opts(mcc) \
+                    -mnc $opts(mnc)
+      eval [list domNode::lte_enodeb -local $opts(local) \
+                        -mme $opts(mme) \
+                        -sctp_over_udp $opts(sctp_over_udp)] \
+                        $sctpport
+      domNode::lte_enodeb_ue \
+                    -num_dedicated_bearers $opts(num_dedicated_bearers) \
+                    -imsi_base $opts(imsi_base) \
+                    -msisdn_base $opts(msisdn_base) \
+                    -secret_key $opts(secret_key) \
+                    -secret_key_step $opts(secret_key_step) \
+                    -operator_variant $opts(operator_variant) \
+                    -mobility_action $opts(mobility_action) \
+                    -mobility_interval_ms $opts(mobility_interval_ms) \
+                    -qos $opts(qos) {
+          domNode::access_point \
+                    -name $opts(access_point_name) \
+                    -username $opts(username) \
+                    -password $opts(password)
+          domNode::bearers {
+            foreach qci $opts(qci_labels) {
+                domNode::bearer -qci_label $qci
+            }
+          }
+      }
+      domNode::dynamic_hosts -id 0 \
+                    -num $opts(count)
+    }]
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::addENodeB {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+
+      {local.arg {} "eNodeB address"}
+      {mme.arg {} "MME this eNodeB will connect to"}
+      {sctp_over_udp.arg false "Use SCTP over UDP rather than directly over IP"}
+      {sctp_sport.arg {} "Specified SCTP source port"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addENodeB options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addENodeB options:"]
+  }
+
+  # First of all, we need to find the subnet that will get a new eNodeB
+  set subnetnode [_findSubnet qdoc $interface $domain $opts(innervlan) $opts(outervlan)]
+  if {[$subnetnode @type ""] != "lte_enodeb"} {
+    error "Selected subnet is not a eNodeB subnet"
+  }
+  set sctpport {}
+  if {$opts(sctp_sport) != ""} {
+    set sctpport [list -sctp_sport $opts(sctp_sport)]
+  }
+  $subnetnode appendFromScript {
+      eval [list domNode::lte_enodeb -local $opts(local) \
+                        -mme $opts(mme) \
+                        -sctp_over_udp $opts(sctp_over_udp)] \
+                        $sctpport
+  }
+
+  _createCommand doc root workingNeighborhoodModifySubnet
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  $root appendChild $subnetnode
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeENodeB {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+
+      {local.arg {} "eNodeB address"}
+  }
+  array set opts [cmdline::getoptions args $optlist "removeENodeB options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "removeENodeB options:"]
+  }
+
+  # First of all, we need to find the subnet that will get a new eNodeB
+  set subnetnode [_findSubnet qdoc $interface $domain $opts(innervlan) $opts(outervlan)]
+  if {[$subnetnode @type ""] != "lte_enodeb"} {
+    error "Selected subnet is not a eNodeB subnet"
+  }
+  set enodebnode [$subnetnode selectNodes "lte_enodeb\[@local='$opts(local)'\]\[1\]"]
+  if {$enodebnode == ""} {
+    error "eNodeB $opts(local) not found"
+  }
+  $subnetnode removeChild $enodebnode
+
+  _createCommand doc root workingNeighborhoodModifySubnet
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  $root appendChild $subnetnode
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeENodeBClients {interface domain 
+                                  {innervlan {}} {outervlan {}}} {
+    removeSubnet $interface $domain $innervlan $outervlan
+}
+
+# Add a group of clients for an LTE eNodeB + MME emulator (setting up the MME
+# and the eNodeB themselves is an implicit part of this.)
+itcl::body bps::NeighborhoodClient::addMMEClients {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+      {dns_server.arg {} "default DNS Server"}
+      {domain_name.arg {} "default DNS search domain"}
+      {behind_snapt.arg {} "Clients will undergo source address or port translation"}
+      {enable_stats "Enable per-host stats tracking on this subnet"}
+
+      {l2.arg {02:1a:c5:01:00:00} "Base ethernet address for hosts"}
+      {netaddr.arg {} "Network address"}
+      {netmask.arg {} "Network mask"}
+      {gateway.arg {} "Gateway address"}
+
+      {local.arg {} "MME address"}
+      {sgw.arg {} "SGW this MME will connect to"}
+      {pgw.arg {} "PGW this MME will connect to"}
+      {enodeb.arg {} "List of eNodeB addresses"}
+
+      {alloc_rate.arg {} "Rate clients are allocated"}
+      {num_dedicated_bearers.arg 0 "Number of dedicated bearers to create per UE"}
+      {qci_labels.arg {} "QCI Labels to use on each bearer, starting with default"}
+      {imsi_base.arg {} "Starting value for IMSI"}
+      {msisdn_base.arg {} "Starting value for IMSI"}
+      {qos.arg {} "QoS setting"}
+      {min.arg {} "Minimum IP address for UEs"}
+      {max.arg {} "Maximum IP address for UEs"}
+      {mobility_action.arg {} "Either \"none\" or \"toggle_idle\""}
+      {mobility_interval_ms.arg {} "Interval for the mobility action, in milliseconds"}
+
+      {access_point_name.arg {} "Access Point name"}
+      {username.arg {} "username"}
+      {password.arg {} "password"}
+      
+      {mcc.arg {} "PLMN MCC"}
+      {mnc.arg {} "PLMN MNC"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addENodeBClients options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addENodeBClients options:"]
+  }
+  _createCommand doc root workingNeighborhoodAddSubnets
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  set subnetattrs {}
+  foreach opt {
+    innervlan outervlan
+    dns_server domain_name
+    behind_snapt
+    l2
+    netaddr netmask gateway
+    alloc_rate
+    enable_stats
+  } {
+      if { $opts($opt) != ""} {
+        lappend subnetattrs -$opt $opts($opt)
+      }
+  }
+  $root appendFromScript {
+    eval [list domNode::subnet -ip_v 4 \
+                    -type lte_enodeb_mme] \
+                    $subnetattrs [list {
+      domNode::plmn -mcc $opts(mcc) \
+                    -mnc $opts(mnc)
+      domNode::lte_mme -local $opts(local) \
+                       -sgw $opts(sgw) \
+                       -pgw $opts(pgw) {
+          foreach enodeb $opts(enodeb) {
+              domNode::lte_enodeb -local $enodeb
+          }
+      }
+      domNode::lte_enodeb_ue \
+                    -num_dedicated_bearers $opts(num_dedicated_bearers) \
+                    -imsi_base $opts(imsi_base) \
+                    -msisdn_base $opts(msisdn_base) \
+                    -mobility_action $opts(mobility_action) \
+                    -mobility_interval_ms $opts(mobility_interval_ms) \
+                    -qos $opts(qos) {
+          domNode::access_point \
+                    -name $opts(access_point_name) \
+                    -username $opts(username) \
+                    -password $opts(password)
+          domNode::bearers {
+            foreach qci $opts(qci_labels) {
+                domNode::bearer -qci_label $qci
+            }
+          }
+      }
+      domNode::range -min $opts(min) \
+                     -max $opts(max)
+    }]
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::addMME {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+
+      {local.arg {} "MME address"}
+      {sgw.arg {} "SGW this MME will connect to"}
+      {pgw.arg {} "PGW this MME will connect to"}
+      {enodeb.arg {} "List of eNodeB addresses"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addENodeB options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addENodeB options:"]
+  }
+
+  # First of all, we need to find the subnet that will get a new eNodeB
+  set subnetnode [_findSubnet qdoc $interface $domain $opts(innervlan) $opts(outervlan)]
+  if {[$subnetnode @type ""] != "lte_enodeb_mme"} {
+    error "Selected subnet is not a MME subnet"
+  }
+  $subnetnode appendFromScript {
+      domNode::lte_mme -local $opts(local) \
+                       -sgw $opts(sgw) \
+                       -pgw $opts(pgw) {
+          foreach enodeb $opts(enodeb) {
+              domNode::lte_enodeb -local $enodeb
+          }
+      }
+  }
+
+  _createCommand doc root workingNeighborhoodModifySubnet
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  $root appendChild $subnetnode
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeMME {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+
+      {local.arg {} "MME address"}
+  }
+  array set opts [cmdline::getoptions args $optlist "removeMME options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "removeMME options:"]
+  }
+
+  # First of all, we need to find the subnet that will get a new eNodeB
+  set subnetnode [_findSubnet qdoc $interface $domain $opts(innervlan) $opts(outervlan)]
+  if {[$subnetnode @type ""] != "lte_enodeb_mme"} {
+    error "Selected subnet is not a MME subnet"
+  }
+  set mmenode [$subnetnode selectNodes "lte_mme\[@local='$opts(local)'\]\[1\]"]
+  if {$mmenode == ""} {
+    error "MME $opts(local) not found"
+  }
+  $subnetnode removeChild $mmenode
+
+  _createCommand doc root workingNeighborhoodModifySubnet
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  $root appendChild $subnetnode
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeMMEClients {interface domain 
+                                  {innervlan {}} {outervlan {}}} {
+    removeSubnet $interface $domain $innervlan $outervlan
+}
+
+# Add a group of clients for an LTE SGW + PGW emulator (setting up the SGW
+# and the PGW themselves is an implicit part of this.)
+itcl::body bps::NeighborhoodClient::addSGWClients {interface domain args} {
+  set optlist {
+      {innervlan.arg {} "vlan tag for this subnet"}
+      {outervlan.arg {} "vlan tag for this subnet"}
+      {dns_server.arg {} "default DNS Server"}
+      {domain_name.arg {} "default DNS search domain"}
+      {behind_snapt.arg {} "Clients will undergo source address or port translation"}
+      {enable_stats "Enable per-host stats tracking on this subnet"}
+
+      {l2.arg {02:1a:c5:01:00:00} "Base ethernet address for hosts"}
+      {netaddr.arg {} "Network address"}
+      {netmask.arg {} "Network mask"}
+      {gateway.arg {} "Gateway address"}
+
+      {local.arg {} "SGW address"}
+      {max_tunnels.arg {} "Maximum number of tunnels for the SGW"}
+      {min.arg {} "Minimum IP address"}
+      {max.arg {} "Maximum IP address"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addENodeBClients options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addENodeBClients options:"]
+  }
+  _createCommand doc root workingNeighborhoodAddSubnets
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  set subnetattrs {}
+  foreach opt {
+    innervlan outervlan
+    dns_server domain_name
+    behind_snapt
+    enable_stats
+    l2
+    netaddr netmask gateway
+  } {
+      if { $opts($opt) != ""} {
+        lappend subnetattrs -$opt $opts($opt)
+      }
+  }
+  $root appendFromScript {
+    eval [list domNode::subnet -ip_v 4 \
+                    -type lte_sgw_pgw] \
+                    $subnetattrs [list {
+      domNode::lte_sgw -local $opts(local) \
+                       -max_tunnels $opts(max_tunnels)
+      domNode::range -min $opts(min) \
+                     -max $opts(max)
+    }]
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeSGWClients {interface domain 
+                                  {innervlan {}} {outervlan {}}} {
+    removeSubnet $interface $domain $innervlan $outervlan
+}
+
+itcl::body bps::NeighborhoodClient::getPaths {} {
+		set conns [$_xmlroot selectNodes connections]
+		if {$conns == ""} {return ""}
+		set ret {}
+		foreach conn [$conns selectNodes connection] {
+				set item {}
+				foreach child [$conn selectNodes subnet] {
+						if {[$child @external false]} {
+								set iface "external"
+						} else {
+								set iface [$child @interface 1]
+						}
+						lappend item $iface [$child @domain default] [$child @vlan ""]
+				}
+				lappend ret $item
+		}
+		return $ret
+}
+
+itcl::body bps::NeighborhoodClient::addPath {sourceinterface sourcedomain sourcevlan 
+                         destinterface destdomain destvlan} {
+  set conns [$_xmlroot selectNodes connections]
+  if {$conns != ""} {
+  		dom parse [$conns asXML] newconnsdoc
+  } else {
+  		dom createDocument connections newconnsdoc
+  }
+  $newconnsdoc documentElement newconns
+  $newconns appendFromScript {
+  		domNode::connection {
+  				foreach {iface domain vlan} [list \
+  				        $sourceinterface $sourcedomain $sourcevlan \
+  				        $destinterface $destdomain $destvlan] {
+  				    if {$iface == "external"} {
+  				    		set ifattrs "-external true"
+  				    } else {
+  				    		if {![string is integer $iface]} {
+  				    				error "invalid interface \"$iface\", must be an integer, or 'external'"
+  				    		}
+  				    		set ifattrs "-interface $iface"
+  				    }
+  				    eval domNode::subnet $ifattrs [list -domain $domain -vlan $vlan]
+  				}
+  		}
+  }
+  _createCommand doc root workingNeighborhoodModify
+  $root appendXML [$newconns asXML]
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removePath {sourceinterface sourcedomain sourcevlan 
+                         destinterface destdomain destvlan} {
+  set conns [$_xmlroot selectNodes connections]
+  if {$conns == ""} {
+  		error "path not found"
+  }
+  dom parse [$conns asXML] newconnsdoc
+  $newconnsdoc documentElement conns
+  if {$sourceinterface == "external"} {
+  		set sifclause "@external='true'"
+  } else {
+  		set sifclause "@interface='$sourceinterface'"
+  }
+  if {$destinterface == "external"} {
+  		set difclause "@external='true'"
+  } else {
+  		set difclause "@interface='$destinterface'"
+  }
+  if {$sourcevlan == ""} {
+  		set svclause "not(@vlan)"
+  } else {
+  		set svclause "@vlan='$sourcevlan'"
+  }
+  if {$destvlan == ""} {
+  		set dvclause "not(@vlan)"
+  } else {
+  		set dvclause "@vlan='$destvlan'"
+  }
+  foreach conn [$conns selectNodes [subst -nocommands {
+  		    connection[subnet[$sifclause and @domain='$sourcedomain' and $svclause]
+  		               and subnet[$difclause and @domain='$destdomain'] ]
+          }]] {
+      $conns removeChild $conn
+  }
+  _createCommand doc root workingNeighborhoodModify
+  $root appendXML [$conns asXML]
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+  return
+}
+
+itcl::body bps::NeighborhoodClient::getFilters {} {
+		set filters [$_xmlroot selectNodes filters]
+		if {$filters == ""} {return ""}
+		set ret {}
+		foreach filter [$filters selectNodes filter] {
+				foreach attr [$filter attributes] {
+						dict set ret [$filter @interface] $attr [$filter @$attr]
+				}
+		}
+		return $ret
+}
+
+itcl::body bps::NeighborhoodClient::setFilter {interface args} {
+  set optlist {
+      {vlan.arg {} "match packets from this vlan"}
+      {not-vlan.arg {} "match packets not from this vlan"}
+      {src-ip.arg {} "match packets with this source ip"}
+      {not-src-ip.arg {} "match packets without this source ip"}
+      {dest-ip.arg {} "match packets with this destination ip"}
+      {not-dest-ip.arg {} "match packets without this destination ip"}
+      {src-port.arg {} "match packets with this source port"}
+      {not-src-port.arg {} "match packets without this source port"}
+      {dest-port.arg {} "match packets with this destination port"}
+      {not-dest-port.arg {} "match packets without this destination port"}
+      {filter.arg and "combine terms using this operation {and, or, nor}"}
+  }
+  array set opts [cmdline::getoptions args $optlist "setFilter options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "setFilter options:"]
+  }
+  foreach mutex {
+  		vlan src-ip dest-ip src-port dest-port
+  } {
+  		if {$opts($mutex) != {} && $opts(not-$mutex) != {}} {
+  				error "options \"-$mutex\" and \"-not-$mutex\" are mutually exclusive"
+  		}
+  }
+  set filters [$_xmlroot selectNodes filters]
+  if {$filters != ""} {
+  		dom parse [$filters asXML] newfiltersdoc
+  } else {
+  		dom createDocument filters newfiltersdoc
+  }
+  $newfiltersdoc documentElement newfilters
+  foreach filter [$newfilters selectNodes [subst -nocommands {
+  		      filter[@interface='$interface']
+          }]] {
+      $newfilters removeChild $filter
+  }
+  set attrs [list interface $interface]
+  foreach attr [array names opts] {
+  		if {$opts($attr) != ""} {
+  				lappend attrs -$attr $opts($attr)
+  		}
+  }
+  $newfilters appendFromScript {
+  		eval [list domNode::filter] $attrs
+  }
+  _createCommand doc root workingNeighborhoodModify
+  $root appendXML [$newfilters asXML]
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeFilter {interface} {
+  set filters [$_xmlroot selectNodes filters]
+  if {$filters == ""} {
+  		error "filter not found"
+  }
+  dom parse [$filters asXML] newfiltersdoc
+  $newfiltersdoc documentElement filters
+  foreach filter [$filters selectNodes [subst -nocommands {
+  		      filter[@interface='$interface']
+          }]] {
+      $filters removeChild $filter
+  }
+  _createCommand doc root workingNeighborhoodModify
+  $root appendXML [$filters asXML]
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+  return
+}
+
+itcl::body bps::NeighborhoodClient::getImpairments {} {
+		set impairments [$_xmlroot selectNodes impairments]
+		if {$impairments == ""} {return ""}
+		set ret {}
+		foreach impairment [$impairments selectNodes impairment] {
+				foreach attr [$impairment attributes] {
+						dict set ret [$impairment @interface] $attr [$impairment @$attr]
+				}
+		}
+		return $ret
+}
+
+itcl::body bps::NeighborhoodClient::addImpairment {interface args} {
+  set optlist {
+      {drop.arg {} "drop packets"}
+      {fragment.arg {} "fragment packets"}
+      {corrupt_lt64.arg {} "corrupt packet in bytes 1-64"}
+      {corrupt_lt256.arg {} "corrupt packet in bytes 65-256"}
+      {corrupt_gt256.arg {} "corrupt packet in bytes 257-end"}
+      {corrupt_rand.arg {} "randomly corrupt packet"}
+      {corrupt_chksum.arg {} "corrupt IP checksum"}
+      {rate.arg 10 "frequency of this corruption"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addImpairment options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addImpairment options:"]
+  }
+  set impairments [$_xmlroot selectNodes impairments]
+  if {$impairments != ""} {
+  		dom parse [$impairments asXML] newimpairmentsdoc
+  } else {
+  		dom createDocument impairments newimpairmentsdoc
+  }
+  $newimpairmentsdoc documentElement newimpairments
+  foreach impairment [$newimpairments selectNodes [subst -nocommands {
+  		      impairment[@interface='$interface']
+          }]] {
+      $newimpairments removeChild $impairment
+  }
+  set attrs [list interface $interface]
+  foreach attr [array names opts] {
+  		if {$opts($attr) != ""} {
+  				lappend attrs -$attr $opts($attr)
+  		}
+  }
+  $newimpairments appendFromScript {
+  		eval [list domNode::impairment] $attrs
+  }
+  _createCommand doc root workingNeighborhoodModify
+  $root appendXML [$newimpairments asXML]
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+  return
+}
+
+itcl::body bps::NeighborhoodClient::removeImpairment {interface} {
+  set impairments [$_xmlroot selectNodes impairments]
+  if {$impairments == ""} {
+  		error "impairment not found"
+  }
+  dom parse [$impairments asXML] newimpairmentsdoc
+  $newimpairmentsdoc documentElement impairments
+  foreach impairment [$impairments selectNodes [subst -nocommands {
+  		      impairment[@interface='$interface']
+          }]] {
+      $impairments removeChild $impairment
+  }
+  _createCommand doc root workingNeighborhoodModify
+  $root appendXML [$impairments asXML]
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+  return
+}
+
+itcl::body bps::NeighborhoodClient::save {args} {
+  set optlist {
+      {name.arg {} "saved app profile name"}
+      {force false "overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+  if {$opts(force)} {
+  		set opts(force) "true"
+  } else {
+  		set opts(force) "false"
+  }
+  _createCommand doc root workingNeighborhoodSave
+  foreach attr {name force} {
+    $root setAttribute $attr $opts($attr)
+  }
+  _makeChange $doc
+}
+
+itcl::body bps::NeighborhoodClient::_cget {option} {
+  switch -exact -- $option {
+    name {return [$_xmlroot @name]}
+  }
+  error "Unknown option $option"
+}
+
+itcl::body bps::NeighborhoodClient::_doConfigChange {args} {
+  foreach {option value} $args {
+    switch -exact -- $option {
+      -name {
+        _createCommand doc root workingNeighborhoodModify
+        $root setAttribute name $value
+        _makeChange $doc
+      }
+      default {
+        error "Unknown option $option"
+      }
+    }
+  }
+  return
+}
+
+itcl::body bps::NeighborhoodClient::_updateXML {} {
+  set ret [$_bpsobj _exec [list getWorkingNeighborhood -instance $_context]]
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+  return
+}
+
+itcl::body bps::NeighborhoodClient::_walkDomains {domainvar interface script} {
+  upvar $domainvar domain
+  if {[string compare $interface "external"] != 0} {
+    set query @interface='$interface'
+  } else {
+    set query @external='true'
+  }
+  set ret {}
+  foreach domain [$_xmlroot selectNodes "domain\[$query\]"] {
+    uplevel $script
+  }
+}
+
+itcl::body bps::NeighborhoodClient::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+}
+
+itcl::body bps::NeighborhoodClient::_makeChange {domdoc} {
+  set ret [$_bpsobj _execXml [$domdoc asXML]]
+  _updateXML
+  return $ret
+}
+
+itcl::body bps::NeighborhoodClient::_findSubnet {docvar interface domain
+                              {innervlan {}} {outervlan {}}} {
+  upvar $docvar doc
+  _createCommand doc root getWorkingNeighborhoodDomain 
+  $root setAttribute iface $interface
+  $root setAttribute domain $domain
+  $root setAttribute limit 0xffff
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+
+  set subnetnode {}
+
+  # Find the one with acceptable VLAN info
+  set vlan 0
+  if {$outervlan != ""} {
+    set vlan $outervlan
+  }
+  if {$innervlan != ""} {
+    set vlan $innervlan
+  }
+  foreach sn [$root selectNodes subnet] {
+    set svlan 0
+    if {[$sn @outervlan ""] != ""} {
+      set svlan [$sn @outervlan]
+    }
+    if {[$sn @innervlan ""] != ""} {
+      set svlan [$sn @innervlan]
+    }
+    if {$svlan == $vlan} {
+      set subnetnode $sn
+      break
+    }
+  }
+  if {$subnetnode == ""} {
+    error "unable to find subnet for interface $interface domain $domain with vid $vlan"
+  }
+  return $subnetnode
+}
+
+package provide bps::NeighborhoodClient 0.1

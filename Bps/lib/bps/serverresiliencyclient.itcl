@@ -1,0 +1,118 @@
+itcl::class bps::ServerResiliencyClient {
+  inherit bps::ResiliencyBase
+  lappend bps::ResiliencyBase::_subclasses ::bps::ServerResiliencyClient
+
+  constructor {bpsobj args} {
+   ResiliencyBase::constructor $bpsobj
+  } {}
+  destructor {}
+
+  public variable name "TCL Server Resiliency Test"
+  public variable numDb 1
+  public variable numWeb 1
+  public variable numFileSystem 1
+  public variable numMail 1
+  public variable numUsers 200
+  public variable neighborhood {}
+
+  public method listNeighborhoods {args}
+  public method run {args}
+
+  public method _rtStats {domnode}
+}
+
+itcl::body bps::ServerResiliencyClient::constructor {bpsobj args} {
+  set _deviceTypes {Server DataCenter}
+  configure -deviceType Server
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::ServerResiliencyClient::destructor {} {
+}
+
+itcl::configbody bps::ServerResiliencyClient::name {
+}
+
+itcl::body bps::ServerResiliencyClient::listNeighborhoods {args} {
+  eval [list $_bpsobj listNeighborhoods] $args "resiliency:true"
+}
+
+itcl::body bps::ServerResiliencyClient::run {args} {
+  if {$_running} {
+    error "unable to execute, test is already running"
+  }
+  set optlist {
+    {runType.arg  AtLeast "run type"}
+    {group.arg    1 "interface group to use"}
+    {async.arg    {} "return immediately, then call the given script upon completion"}
+    {progress.arg {} "script to run with progress notifications"}
+    {rtstats.arg {} "script to run with rtstats notifications"}
+    {flowexceptions.arg {} "script to run with flow exception notifications"}
+  }
+  array set opts [cmdline::getoptions args $optlist "run options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "run options:"]
+  }
+  dom createDocument executeResiliency doc
+  $doc documentElement root
+
+  if {[lsearch {
+    Validate
+    AtLeast
+    Exactly
+  } $opts(runType)] == -1} {
+      error "Invalid runType $opts(runType). Must be one of Validate, AtLeast, Exactly"
+  }
+  foreach var {
+      neighborhood
+      deviceType
+      numDb
+      numWeb
+      numFileSystem
+      numMail } {
+      $root setAttribute $var [set $var]
+  }
+  if { $opts(runType) == "AtLeast" } {
+      $root setAttribute minNumUsers $numUsers
+      $root setAttribute runType "Quick"
+  } elseif { $opts(runType) == "Exactly" } {
+      $root setAttribute numUsers $numUsers
+      $root setAttribute runType "Quick"
+  } else {
+      $root setAttribute runType $opts(runType)
+  }
+  $root setAttribute reportName $name
+  $root setAttribute group $opts(group)
+
+  _run $doc opts
+}
+
+itcl::body bps::ServerResiliencyClient::_rtStats {domnode} {
+  if {[info exists _execRTStats]} {
+  		set values {}
+  		foreach subclass {
+  				dbUsage
+  				httpUsage
+  				fileSystemUsage
+  				mailUsage} {
+  			set node [$domnode selectNodes child::$subclass]
+  			if {$node != ""} {
+  			    dict set values $subclass {}
+  			    foreach attr {numUsers success latency} {
+  			        if {[$node hasAttribute $attr]} {
+  			            dict set values $subclass $attr [$node @$attr 0]
+  			        }
+  			    }
+  			}
+  		}
+  		if {$values != ""} {
+  		    _try $_execRTStats $values
+  		}
+  }
+}
+
+package provide bps::ServerResiliencyClient 0.1

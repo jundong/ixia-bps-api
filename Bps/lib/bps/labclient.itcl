@@ -1,0 +1,499 @@
+#######################################################
+#
+# Ideally, this would just be a subclass of TestClient. However, it
+# has not been implemented that way - the reason is, TestClient has a
+# lot of features that can't be exposed in this client, like adding components,
+# changing component config, etc. It was easier to duplicate some code than try
+# to hide away all the stuff that shouldn't be exposed for this special kind of
+# test.
+# 
+#######################################################
+itcl::class bps::LabClient {
+  inherit bps::Client
+
+  constructor {bpsobj args} {
+    Client::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _xmldoc
+  protected variable _xmlroot
+  protected variable _reply
+  protected variable _resultIdDoc
+  protected variable _resultId
+  protected variable _execProgress
+  protected variable _execAsync
+  protected variable _running false
+  protected variable _execRTStats
+  protected variable _execFlowExceptions
+
+  protected common _tests
+  protected common _rtstatTest
+  protected common _subclasses
+  set _subclasses {}
+
+  public method run {args}
+  public method cancel {args}
+  public method wait {}
+  protected method _save {args}
+  protected method _saveNamed {args}
+
+  public method resultId {}
+  public method clearResults {}
+
+  public method exportReport {args}
+  public method validate {args}
+
+  public method isPending {} { return [info exists _reply] }
+
+  protected method _fixmodel {xmlnode}
+  public method _updateXML {args}
+  protected method _createCommand {docvar rootvar command}
+  protected method _makeChange {domdoc}
+
+  protected method _testComplete {domnode}
+  protected method _testProgress {domnode}
+  protected method _rtStats {domnode}
+  protected method _flowException {domnode}
+  protected method _try {cmd args}
+
+  protected method _setWorkingModel {canned custom {template {}}}
+
+  public proc _testEvent {event bpsobj domnode}
+}
+
+# <lawfulIntercept 
+#       sessionsPerSecond="1000" 
+#       concurrentSessions="10000"
+#       appProfile="BreakingPoint Enterprise" 
+#       duration="00:00:30" >
+# </lawfulIntercept>
+
+itcl::body bps::LabClient::constructor {
+	  bpsobj args} {
+  return
+}
+
+itcl::body bps::LabClient::destructor {} {
+  if {[info exists _resultId]
+      && [info exists _tests([info class],$_bpsobj,[$_resultId @runid],[$_resultId @host])]} {
+    unset _tests([info class],$_bpsobj,[$_resultId @runid],[$_resultId @host])
+  }
+  if {[info exists _rtstatTest([info class],$_bpsobj)] && $_rtstatTest([info class],$_bpsobj) == [namespace which $this]} {
+    unset _rtstatTest([info class],$_bpsobj)
+  }
+  _createCommand doc root workingModelForget
+  catch {$_bpsobj _execXml [$doc asXML]}
+}
+
+itcl::body bps::LabClient::run {args} {
+  if {$_running} {
+    error "unable to execute, test is already running"
+  }
+  set optlist {
+    {group.arg    1 "interface group to use"}
+    {async.arg    {} "return immediately, then call the given script upon completion"}
+    {progress.arg {} "script to run with progress notifications"}
+    {rtstats.arg {} "script to run with rtstats notifications"}
+    {flowexceptions.arg {} "script to run with flow exception notifications"}
+    {allowMalware "confirm that malware should be allowed in this test"}
+  }
+  array set opts [cmdline::getoptions args $optlist "run options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "run options:"]
+  }
+  # get rid of results from last run now that we're running a new one
+  if {[info exists _resultId]} {
+    if {[info exists _tests([info class],$_bpsobj,[$_resultId @runid],[$_resultId @host])]} {
+      unset _tests([info class],$_bpsobj,[$_resultId @runid],[$_resultId @host])
+    }
+    unset _resultId
+  }
+  if {[info exists _resultIdDoc]} {
+    unset _resultIdDoc
+  }
+  if {[info exists _execProgress]} {
+    unset _execProgress
+  }
+  if {[info exists _execRTStats]} {
+    unset _execRTStats
+  }
+  if {[info exists _execFlowExceptions]} {
+    unset _execFlowExceptions
+  }
+  dom parse [$_xmldoc asXML] mdoc
+  $mdoc documentElement mroot
+  _fixmodel $mroot
+  set _reply pending
+  if {[catch {
+    dom createDocument executeTestModel doc
+    $doc documentElement root
+    $root setAttribute group $opts(group)
+    $root setAttribute allowMalware $opts(allowMalware)
+    $root appendXML [$mdoc asXML]
+    set _running true
+    set ret [$_bpsobj _execXml [$doc asXML]]
+    dom parse $ret dom
+    $dom documentElement doc
+    set rid [$doc selectNode testmodelid]
+    dom parse [$rid asXML] _resultIdDoc
+    $_resultIdDoc documentElement _resultId
+
+    if {$opts(progress) != ""} {
+      set _execProgress [concat $opts(progress) [list [$rid @name]]]
+    }
+    if {$opts(rtstats) != ""} {
+      set _execRTStats [concat $opts(rtstats) [list [$rid @name]]]
+    }
+    if {$opts(flowexceptions) != ""} {
+      set _execFlowExceptions [concat $opts(flowexceptions) [list [$rid @name]]]
+    }
+  } err]} {
+    global errorCode errorInfo
+    unset _reply
+    set _running false
+    error $err $errorInfo $errorCode
+  }
+  set _tests([info class],$_bpsobj,[$_resultId @runid],[$_resultId @host]) [namespace which $this]
+  set _rtstatTest([info class],$_bpsobj) [namespace which $this]
+  if {$opts(async) != ""} {
+    set _execAsync $opts(async)
+    return
+  }
+  set ret [wait]
+  return $ret
+}
+
+itcl::body bps::LabClient::cancel {args} {
+  set optlist {
+      {force "abort cleanup operations"}
+  }
+  array set opts [cmdline::getoptions args $optlist "cancel options:"]
+  if {![info exists _resultId]} { return }
+  dom createDocument cancelTestModel doc
+  $doc documentElement root
+  $root appendXML [$_resultId asXML]
+  if {$opts(force)} {
+    $root setAttribute force true
+  }
+  $_bpsobj _execXml [$doc asXML]
+  return
+}
+
+itcl::body bps::LabClient::wait {} {
+  if {![info exists _reply]} {
+    return
+  }
+  if {$_reply == "pending"} {
+    vwait [itcl::scope _reply]
+  }
+  set ret $_reply
+  unset _reply
+  return $ret
+}
+
+itcl::body bps::LabClient::_save {name args} {
+  set optlist {
+      {force false "overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+
+  _createCommand doc root workingModelSave
+  if {$opts(force)} {
+  		set opts(force) "true"
+  } else {
+  		set opts(force) "false"
+  }
+  $root setAttribute force $opts(force)
+  $root setAttribute name $name
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::LabClient::_saveNamed {name args} {
+  set optlist {
+      {name.arg {} "test name"}
+      {force false "overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+  if {$opts(name) != ""} {
+    set name $opts(name)
+  }
+  if {$opts(force)} {
+      return [_save $name -force]
+  }
+  return [_save $name]
+}
+
+itcl::body bps::LabClient::resultId {} {
+    if {![info exists _resultId]} {
+        error "No results available"
+    }
+    return [lindex [namespace inscope ::bps::BPSConnection _getTestResultId $_resultId] 0]
+}
+
+itcl::body bps::LabClient::clearResults {} {
+  if {[info exists _resultId]} {
+    if {[info exists bps::LabClient::_tests([info class],$_bpsobj,[$_resultId @runid],[$_resultId @host])]} {
+        unset bps::LabClient::_tests([info class],$_bpsobj,[$_resultId @runid],[$_resultId @host])
+    }
+    unset _resultId
+  }
+  return
+}
+
+
+itcl::body bps::LabClient::exportReport {args} {
+  set optlist {
+    {file.arg    {} "output file"}
+    {iterations.arg {} "comparison iterations (or result ID's in form of test@<testid>@)"}
+    {channel.arg {} "output channel"}
+    {format.arg pdf "report format {zip, html, pdf, rtf, xls, bpt, csv}"}
+    {sectionids.arg {} "section ids"}
+  }
+  array set opts [cmdline::getoptions args $optlist "exportReport options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "exportReport options:"]
+  }
+
+  if {![info exists _resultId]} {
+    error "No results available"
+  }
+
+  $_bpsobj exportReport -file $opts(file) -channel $opts(channel) -format $opts(format) -testid [resultId] -iterations $opts(iterations) -sectionids $opts(sectionids)
+}
+
+itcl::body bps::LabClient::validate {args} {
+  set optlist {
+    {group.arg    1 "interface group to use"}
+  }
+  array set opts [cmdline::getoptions args $optlist "validate options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "validate options:"]
+  }
+  _createCommand doc root workingModelValidate
+  $root setAttribute group $opts(group)
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+  set msgs {}
+  foreach check [$root selectNodes check] {
+  		if {[$check @result fail] == "fail"} {
+  				set label [$check selectNodes label/child::node()/child::node()]
+  				if {$label != ""} {
+  						set label [$label asText]
+  				}
+  				lappend msgs $label
+  		}
+  }
+  return $msgs
+}
+
+itcl::body bps::LabClient::_fixmodel {xmlnode} {
+  if {[$xmlnode hasAttribute canSave]} {
+    $xmlnode removeAttribute canSave
+  }
+  if {[$xmlnode hasAttribute namechanged]} {
+    $xmlnode removeAttribute namechanged
+  }
+  if {[$xmlnode hasAttribute saved]} {
+    $xmlnode removeAttribute saved
+  }
+  $xmlnode setAttribute schemaver [$_bpsobj _schemaver]
+  $xmlnode setAttribute author [$_bpsobj userid]
+  $xmlnode setAttribute class custom
+}
+
+itcl::body bps::LabClient::_updateXML {} {
+  set ret [$_bpsobj _exec [list getWorkingModel -instance $_context]]
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+  return
+}
+
+itcl::body bps::LabClient::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+}
+
+itcl::body bps::LabClient::_makeChange {domdoc} {
+  set ret [$_bpsobj _execXml [$domdoc asXML]]
+  _updateXML
+  return $ret
+}
+
+itcl::body bps::LabClient::_testComplete {domnode} {
+  set tm [$domnode selectNodes //testComplete]
+  set _reply [$tm @result]
+  foreach crit [$tm selectNodes failedCriteria/error] {
+  		set detail [$crit selectNodes detail/child::node()]
+  		if {$detail != ""} {
+  				set detail [$detail asXML]
+  		}
+  		lappend _reply [list $detail [$crit @id]]
+  }
+  foreach crit [$tm selectNodes failedCriteria/criteria/faildesc] {
+  		set label [$crit selectNodes parent::node()/label/child::node()/child::node()]
+  		if {$label != ""} {
+  				set label [$label asXML]
+  		}
+  		set detail [$crit selectNodes child::node()/child::node()]
+  		if {$detail != ""} {
+  				set detail [$detail asXML]
+  		}
+  		lappend _reply [list $detail $label]
+  }
+  set _running false
+  if {[info exists _execAsync]} {
+  	set async $_execAsync
+    unset _execAsync
+    unset _tests([info class],$_bpsobj,[$_resultId @runid],[$_resultId @host])
+    if {[info exists _execProgress]} {
+      unset _execProgress
+    }
+    if {[info exists _rtstatTest([info class],$_bpsobj)] && $_rtstatTest([info class],$_bpsobj) == [namespace which $this]} {
+    		unset _rtstatTest([info class],$_bpsobj)
+    }
+    if {[info exists _execRTStats]} {
+      unset _execRTStats
+    }
+    if {[info exists _execFlowExceptions]} {
+      unset _execFlowExceptions
+    }
+    # do this at the last, in case the callback deletes $this
+    set id [resultId]
+	after 1000 [namespace code [concat [list $this _try $async] $id $_reply]]
+  }
+}
+
+itcl::body bps::LabClient::_testProgress {domnode} {
+  if {[info exists _execProgress]} {
+    set pcent [$domnode @progress 0]
+    _try $_execProgress [expr int($pcent)]
+  }
+}
+
+itcl::body bps::LabClient::_rtStats {domnode} {
+  if {[info exists _execRTStats]} {
+  		dict set values progress [$domnode @progress 0]
+  		dict set values time [$domnode @time 0]
+  		dict set values t [$domnode @t 0]
+  		set vals [$domnode selectNodes values/child::node()]
+  		if {$vals != ""} {
+  				set vals [$vals asXML]
+  		}
+  		while {[regexp {(\w+)='([^']*)' (.*$)} $vals junk var val vals]} {
+  			 dict set values $var $val
+  		}
+
+  		_try $_execRTStats $values
+  }
+}
+
+itcl::body bps::LabClient::_flowException {domnode} {
+  if {[info exists _execFlowExceptions]} {
+  		set vals {}
+  		foreach attr {component componentType} {
+  		    dict set vals $attr [$domnode @$attr]
+  		}
+  		foreach node [$domnode selectNodes dp/param] {
+  				set value [$node selectNodes child::node()]
+  				if {$value != ""} {
+  						set value [$value asXML]
+  				}
+  		    dict set vals [$node @id] $value
+  		}
+  		_try $_execFlowExceptions $vals
+  }
+}
+
+itcl::body bps::LabClient::_try {cmd args} {
+  if {[catch {uplevel #0 $cmd $args} err]} {
+    puts stderr "Error executing command \"$cmd $args\": $err"
+  }
+  return
+}
+
+itcl::body bps::LabClient::_setWorkingModel {canned custom {template {}}} {
+    _createCommand doc root setWorkingModel
+    if {$template == ""} {
+        $root setAttribute template $custom
+        if {[catch {set ret [$_bpsobj _execXml [$doc asXML]]} err]} {
+  		    $root setAttribute template $canned
+  		    set ret [$_bpsobj _execXml [$doc asXML]]
+        }
+    } else {
+        $root setAttribute template $template
+  		set ret [$_bpsobj _execXml [$doc asXML]]
+    }
+    dom parse $ret _xmldoc
+    $_xmldoc documentElement _xmlroot
+    foreach unwanted {author revision timestamp class} {
+      if {[$_xmlroot hasAttribute $unwanted]} {
+        $_xmlroot removeAttribute $unwanted
+      }
+    }
+}
+
+itcl::body bps::LabClient::_testEvent {event bpsobj domnode} {
+  set resultId [$domnode selectNodes //testmodelid]
+  if {$resultId == "" && $event != "#rtstats"} return
+  switch $event {
+    testStart {
+#<com type="notify" token="testStart" status="ok"><message><test >
+#  <param name="modelname"></param>
+#  <param name="userid">kraney</param>
+#  <param name="starttime">2006-06-09T16:09:04</param>
+#  <param name="iteration">2</param>
+#  <param name="progress">0</param>
+#</test></message></com>
+    }
+    testComplete {
+      foreach class $_subclasses {
+          if {[info exists _tests($class,$bpsobj,[$resultId @runid],[$resultId @host])]} {
+            $_tests($class,$bpsobj,[$resultId @runid],[$resultId @host]) _testComplete $domnode
+          }
+      }
+    }
+    chassisState {
+      foreach resultId [$domnode selectNodes //testmodelid] {
+        set data [$resultId selectNodes parent::node()]
+        foreach class $_subclasses {
+            if {[info exists _tests($class,$bpsobj,[$resultId @runid],[$resultId @host])]} {
+              $_tests($class,$bpsobj,[$resultId @runid],[$resultId @host]) _testProgress $data
+            }
+        }
+      }
+    }
+    #rtstats {
+        foreach class $_subclasses {
+            if {[info exists bps::LabClient::_rtstatTest($class,$bpsobj)]} {
+    		        $bps::LabClient::_rtstatTest($class,$bpsobj) _rtStats $domnode
+            }
+        }
+    }
+    #flowexception {
+        foreach resultId [$domnode selectNodes //testmodelid] {
+            set data [$resultId selectNodes parent::node()]
+            foreach class $_subclasses {
+                if {[info exists _tests($class,$bpsobj,[$resultId @runid],[$resultId @host])]} {
+    		            $bps::LabClient::_tests($class,$bpsobj,[$resultId @runid],[$resultId @host]) _flowException $data
+    		        }
+            }
+        }
+    }
+    default {}
+  }
+  return
+}
+
+package provide bps::LabClient 0.1

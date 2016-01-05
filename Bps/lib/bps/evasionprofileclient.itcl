@@ -1,0 +1,246 @@
+itcl::class bps::EvasionProfileClient {
+  inherit bps::Client
+
+  constructor {bpsobj template args} {
+    Client::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _paramtype
+  protected variable _params
+  protected variable _construction 0
+  protected variable _xmldoc
+  protected variable _xmlroot
+  protected variable _counter 0
+
+  public method getParameters {}
+  public method unset {args}
+  public method save {args}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+  protected method _updateXML {args}
+  protected method _makeChange {domdoc}
+
+  # override this because default doesn't make sense in our case
+  protected method _describeStruct {groupid prefix}
+}
+
+itcl::body bps::EvasionProfileClient::constructor {
+	  bpsobj template args} {
+  _createCommand doc root setWorkingAttackProfile
+  if {[string compare $template ""] != 0} {
+    $root setAttribute template $template
+  }
+
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  set _construction 1
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+
+  set paramstuff [$_xmlroot selectNodes struct\[@id='StrikeOptions'\]]
+  set params [model::ComponentProxy::parseComponentParams $paramstuff]
+  array set _default [model::ComponentProxy::flatComponentParams $paramstuff]
+  
+  set desc [$_bpsobj _exec getSecurityOptions]
+  dom parse $desc defdoc
+  $defdoc documentElement defroot
+  set namespace [namespace current]::s[incr _counter]
+
+  set memberlist [model::processTypeDeclarationList $namespace \
+                                   [$defroot selectNodes members] ]
+  set _paramtype [model::defineStruct $namespace params \
+                                         $memberlist \
+                                         {}]
+  set _params [namespace which [$_paramtype #auto -value $params \
+                                -context $_bpsobj]]
+		  
+  set name [namespace tail $this]
+  $_bpsobj _exec [list workingAttackProfileModify -instance $_context \
+                     -name $name]
+  set _default(name) $name
+
+  configure -name $name
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  set _construction 2
+  return
+}
+
+itcl::body bps::EvasionProfileClient::destructor {} {
+  if {$_construction >= 1} {
+    catch {$_bpsobj _exec "workingAttackProfileForget -instance $_context"}
+  }
+  if {[info exists _params]} {
+    catch {
+      itcl::delete object $_params
+    }
+  }
+}
+
+itcl::body bps::EvasionProfileClient::getParameters {} {
+  set desc [$_bpsobj _exec getSecurityOptions]
+  dom parse $desc defdoc
+  $defdoc documentElement defroot
+  _describeStruct [$defroot selectNodes members] ""
+}
+
+itcl::body bps::EvasionProfileClient::unset {args} {
+  _createCommand doc root workingAttackProfileModify 
+
+  try {
+    set vals [$_params cget -value]
+    foreach key $args {
+      if {![string match -* $key]} {
+        error "Invalid option $key"
+      }
+      set key [string range $key 1 end]
+      set path {}
+      foreach part [split $key .] {
+        lappend path $part
+        if {![eval dict exists [list $vals] $path]} {
+          error "No value is set for parameter -$key"
+        }
+      }
+      eval dict unset vals $path
+      set path [lrange $path 0 end-1]
+      while {[llength $path] > 0 && [eval dict get [list $vals] $path] == {}} {
+        eval dict unset vals $path
+        set path [lrange $path 0 end-1]
+      }
+    }
+    set param [$_paramtype #auto -value $vals]
+    set xml [$param paramSpec StrikeOptions]
+  } finally {
+    if {[info exists param]} {
+      itcl::delete object $param
+    }
+  }
+  $root appendXML $xml
+  _makeChange $doc
+  # drop unset parameters from our configuration option list
+  foreach key $args {
+    set key [string range $key 1 end]
+    if {[info exists _default($key)]} {
+      ::unset _default($key)
+    }
+  }
+  return
+}
+
+itcl::body bps::EvasionProfileClient::save {args} {
+  set optlist {
+      {name.arg {} "saved profile name"}
+      {force false "overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+  _createCommand doc root workingAttackProfileSave
+  foreach attr {name force} {
+    $root setAttribute $attr $opts($attr)
+  }
+  _makeChange $doc
+}
+
+itcl::body bps::EvasionProfileClient::_cget {option} {
+  switch -exact -- $option {
+    name {return [$_xmlroot @name]}
+    default {
+      if {[eval [list dict exists [$_params cget -value]] [split $option .]]} {
+        return [eval [list dict get [$_params cget -value]] [split $option .]]
+      }
+    }
+  }
+  error "Unknown option $option"
+}
+
+itcl::body bps::EvasionProfileClient::_doConfigChange {args} {
+  set vals {}
+  _createCommand doc root workingAttackProfileModify
+
+  foreach {option value} $args {
+    switch -exact -- $option {
+      -name {
+        $root setAttribute name $value
+      }
+      default {
+        lappend vals $option $value
+      }
+    }
+  }
+  if {[catch {
+    if {[llength $vals] > 0} {
+      set oldval [$_params cget -value]
+      set newval [eval [list _heirarchical $oldval] $vals]
+      set newparams [namespace which [$_paramtype #auto -value $newval \
+                                -context $_bpsobj]]
+      set xml [$newparams paramSpec StrikeOptions]
+      $root appendXML $xml
+    }
+    _makeChange $doc
+    if {[info exists newparams]} {
+      itcl::delete object $_params
+      set _params $newparams
+    }
+    foreach {option value} $vals {
+      set option [string range $option 1 end]
+      # make new parameters show up in our list of parameters that have values
+      if {![info exists _default($option)]} {
+        set _default($option) $value
+      }
+    }
+  } err]} {
+    global errorInfo errorCode
+    set ei $errorInfo
+    set ec $errorCode
+    if {[info exists newparams]} {
+        itcl::delete object $newparams
+    }
+    error $err $ei $ec
+  }
+  return
+}
+
+itcl::body bps::EvasionProfileClient::_updateXML {} {
+  set ret [$_bpsobj _exec [list getWorkingAttackProfile -instance $_context]]
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+  return
+}
+
+itcl::body bps::EvasionProfileClient::_makeChange {domdoc} {
+  set ret [$_bpsobj _execXml [$domdoc asXML]]
+  _updateXML
+  return $ret
+}
+
+itcl::body bps::EvasionProfileClient::_describeStruct {xmlnode prefix} {
+  if {$prefix != ""} {
+    set prefix ${prefix}.
+  }
+  set ret {}
+  foreach node [$xmlnode selectNodes child::*] {
+    set name [$node @id [$node @name ""]]
+    switch [$node nodeName] {
+      list -
+      struct {
+        eval lappend ret [_describeStruct [$node selectNodes members] $prefix$name]
+      }
+      default {
+        set descnode [$node selectNodes description/child::*/child::node()]
+        set description ""
+        if {$descnode != ""} {
+          set description [$descnode asXML]
+        }
+        lappend ret -$prefix[$node @id [$node @name ""]] $description
+      }
+    }
+  }
+  return $ret
+}
+
+package provide bps::EvasionProfileClient 0.1

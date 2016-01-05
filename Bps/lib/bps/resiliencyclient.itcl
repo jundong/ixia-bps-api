@@ -1,0 +1,154 @@
+itcl::class bps::ResiliencyClient {
+  inherit bps::ResiliencyBase
+  lappend bps::ResiliencyBase::_subclasses ::bps::ResiliencyClient
+
+  constructor {bpsobj args} {
+   ResiliencyBase::constructor $bpsobj
+  } {}
+  destructor {}
+
+  public variable name "TCL Resiliency Test"
+  public variable runSecurity true
+  public variable runSessionRate true
+  public variable runThroughput true
+  public variable runRobustness true
+  public variable speed 1000
+
+  public method getNeighborhood {}
+
+  public method run {args}
+
+  public method _rtStats {domnode}
+}
+
+itcl::body bps::ResiliencyClient::constructor {bpsobj args} {
+  set _deviceTypes {Switch Router Firewall Proxy IPS UTM}
+  configure -deviceType Switch
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::ResiliencyClient::destructor {} {
+}
+
+itcl::configbody bps::ResiliencyClient::name {
+}
+
+itcl::configbody bps::ResiliencyClient::runSecurity {
+		if {![string is boolean -strict $runSecurity]} {
+				error "value must be \"true\" or \"false\""
+		}
+		if {$runSecurity} {
+				set runSecurity true
+		} else {
+				set runSecurity false
+		}
+}
+
+itcl::configbody bps::ResiliencyClient::runSessionRate {
+		if {![string is boolean -strict $runSessionRate]} {
+				error "value must be \"true\" or \"false\""
+		}
+		if {$runSessionRate} {
+				set runSessionRate true
+		} else {
+				set runSessionRate false
+		}
+}
+
+itcl::configbody bps::ResiliencyClient::runThroughput {
+		if {![string is boolean -strict $runThroughput]} {
+				error "value must be \"true\" or \"false\""
+		}
+		if {$runThroughput} {
+				set runThroughput true
+		} else {
+				set runThroughput false
+		}
+}
+
+itcl::configbody bps::ResiliencyClient::runRobustness {
+		if {![string is boolean -strict $runRobustness]} {
+				error "value must be \"true\" or \"false\""
+		}
+		if {$runRobustness} {
+				set runRobustness true
+		} else {
+				set runRobustness false
+		}
+}
+
+itcl::configbody bps::ResiliencyClient::speed {
+		if {![string is integer -strict $speed] || $speed < 100} {
+				error "Invalid speed $speed"
+		}
+    #speed 1000
+}
+
+itcl::body bps::ResiliencyClient::getNeighborhood {} {
+    dom createDocument getResiliencyNeighborhood doc
+    $doc documentElement root
+    $root setAttribute deviceType $deviceType
+    set ret [$_bpsobj _execXml [$doc asXML]]
+    dom parse $ret dom
+    $dom documentElement doc
+
+    return [$_bpsobj createNeighborhood -template [$doc @name]]
+}
+
+itcl::body bps::ResiliencyClient::run {args} {
+  if {$_running} {
+    error "unable to execute, test is already running"
+  }
+  set optlist {
+    {runType.arg  Full "run type"}
+    {group.arg    1 "interface group to use"}
+    {async.arg    {} "return immediately, then call the given script upon completion"}
+    {progress.arg {} "script to run with progress notifications"}
+    {rtstats.arg {} "script to run with rtstats notifications"}
+    {flowexceptions.arg {} "script to run with flow exception notifications"}
+  }
+  array set opts [cmdline::getoptions args $optlist "run options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "run options:"]
+  }
+  dom createDocument executeResiliency doc
+  $doc documentElement root
+  $root setAttribute reportName $name
+  $root setAttribute runSecurity $runSecurity
+  $root setAttribute runSessionRate $runSessionRate
+  $root setAttribute runThroughput $runThroughput
+  $root setAttribute runRobustness $runRobustness
+  $root setAttribute speed $speed
+  $root setAttribute deviceType $deviceType
+
+  $root setAttribute runType $opts(runType)
+  $root setAttribute group $opts(group)
+  _run $doc opts
+}
+
+itcl::body bps::ResiliencyClient::_rtStats {domnode} {
+  if {[info exists _execRTStats]} {
+  		set values {}
+  		foreach subclass {
+  				networkInterface
+  				deepPacketInspection
+  				sessionTable
+  				cpu
+  				routingEngine
+  				threatDetectionEngine} {
+  			set node [$domnode selectNodes child::$subclass]
+  			if {$node != "" && [$node hasAttribute utilization]} {
+  			    dict set values $subclass [$node @utilization 0]
+  			}
+  		}
+  		if {$values != ""} {
+  		    _try $_execRTStats $values
+  		}
+  }
+}
+
+package provide bps::ResiliencyClient 0.1

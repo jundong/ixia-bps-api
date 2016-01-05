@@ -1,0 +1,3333 @@
+package require Itcl
+package require flash
+package require tdom
+package require log
+package require cmdline
+package require model
+package require domunknown
+package require http
+package require multipart
+
+package require tls
+package require http
+http::register https 443 [list ::tls::socket -request false]
+
+namespace eval bps {
+  namespace export connect textprogress
+}; # end of namespace installer
+# global list of hosts currently connected
+
+itcl::class bps::BPSConnection {
+  constructor {host userid password args} {}
+  destructor {}
+
+  public variable name    script
+  public variable port    8880
+  public variable shortcuts true;# whether to create shortcut commands
+  public variable onclose    bps::reportclose
+  public variable checkversion    true
+  public variable timeout 90
+
+  protected variable _socket
+  protected variable _channel
+  protected variable _tokenIdx 0
+  protected variable _after
+  protected variable _ping
+  protected variable _reply
+  protected variable _testParamStruct
+  protected variable _networkParamStruct
+  protected variable _component {}
+  protected variable _componentObjs
+  protected variable _contexts
+  protected variable _execAsync
+  protected variable _execProgress
+  protected variable _connection
+  protected variable _host
+  protected variable _connecting
+  protected variable _systemglobal
+  protected variable _userid
+  protected variable _systemtype
+  protected variable _schemaver
+  protected variable _version
+  protected variable _build
+  protected variable _strikepack
+  protected variable _jsessionid
+  protected variable _locale
+  protected variable _componentDom
+  protected variable _componentDoc
+  protected variable _networkDom
+  protected variable _networkDoc
+  protected variable _testDom
+  protected variable _testDoc
+
+  protected variable _nextid 1
+
+  public method userid {} { return $_userid }
+  public method host {} { return $_host }
+  public method locale {} { return $_locale }
+  public method initContext {ctxname args}
+  public method deleteContext {ctxname}
+  public method configureContext {ctxname args}
+  protected method _configureContext {ctxname args}
+  protected method _deleteContext {ctxname}
+  protected method _callping {}
+
+  public method createComponent {args}
+  public method getAggStats {args}
+  public method run {args}
+  public method cancel {{context default}}
+  public method wait {{context default}}
+  public method delete {}
+  public method save {args}
+  public method createNetwork {args}
+  public method createNeighborhood {args}
+  public method setNeighborhood {name {context default}}
+  public method getNeighborhood {{context default}}
+  public method setDut {name {context default}}
+  public method getDut {{context default}}
+  public method deleteNeighborhood {args}
+  public method getTest {context}
+  public method importTest {name args}
+  public method createTest {args}
+  public method deleteTest {name args}
+  public method createTestSeries {args}
+  public method deleteTestSeries {name}
+  public method createMultiboxTest {args}
+  public method deleteMultiboxTest {name}
+  public method createAppProfile {args}
+  public method deleteAppProfile {args}
+  public method createSuperflow {args}
+  public method deleteSuperflow {args}
+  public method createLoadProfile {args}
+  public method deleteLoadProfile {args}
+  public method createAttackSeries {args}
+  public method deleteAttackSeries {args}
+  public method createEvasionProfile {args}
+  public method deleteEvasionProfile {args}
+  public method createStrikeList {args}
+  public method deleteStrikeList {args}
+  public method createRFC2544Test {args}
+  public method createSessionLabTest {args}
+  public method createLawfulInterceptTest {args}
+  public method createMulticastTest {args}
+  public method createLTETest {args}
+  public method createResiliencyTest {args}
+  public method createServerResiliencyTest {args}
+  public method importStrikelist {name args}
+  public method importPcap {name args}
+  public method importLicense {args}
+  public method getLicenses {}
+  public method iluGetLicenses {server}
+  public method iluGetLicenseServers {}
+  public method iluAddLicenseServers {args}
+  public method iluDeleteLicenseServers {args}
+  public method iluGetHostId {server}
+  public method iluLicActivation {actCode quantity server}
+  public method iluLicDeactivation {actCode quantity server}
+  public method iluLicSync {server}
+  public method iluGetFloatingStats {server}
+  public method iluImportLicenseFile {importFilePath server}
+  public method iluGetVersion {}
+
+  public method resultId {{context default}}
+  public method clearResults {{context default}}
+  public method getSystemGlobal {varname}
+  public method getSystemType {} {return $_systemtype}
+  public method getVersion {} {return $_version}
+  public method getBuildId {} {return $_build}
+  public method getStrikepackId {} {return $_strikepack}
+
+  public method getReportComponents {testid {iterations {}}}
+  public method getReportContents {testid args}
+  public method getReportSectionXML {testid args}
+  public method getReportTable {testid args}
+
+  public method listTestResults {args}
+  public method deleteTestResults {args}
+  public method listAppProfiles {args}
+  public method listSuperflows {args}
+  public method listProtocols {args}
+  public method listDUTs {args}
+  public method listTests {args}
+  public method listTestSeries {args}
+  public method listMultiboxTests {args}
+  public method listNeighborhoods {args}
+  public method listAttackProfiles {args}
+  public method listEvasionProfiles {args}
+  public method listAttackSeries {args}
+  public method listStrikes {args}
+  public method listStrikeSets {args}
+  public method searchStrikes {args}
+  public method searchStrikeLists {args}
+  public method listStrikeKeywords {}
+  public method getStrikeInfo {strike}
+  public method getStrikeSetInfo {strikeset}
+  public method listLoadProfiles {args}
+  protected method _callNamesAPI {desc cmd rcmd node args}
+
+  public method factoryRevert {args}
+  public method previousRevert {args}
+  public method networkInfo {args}
+  public method cliVersion {args}
+  public method serialNumber {args}
+  public method uptime {args}
+  public method updateNetwork {args}
+  public method reboot {args}
+  public method backup {args}
+  public method listBackups {args}
+  public method restoreBackup {args}
+
+  public method installUpdate {args}
+  public method installStrikepack {args}
+
+  public method exportReport {args}
+  public method exportFlowStats {args}
+  public method exportTest {args}
+
+  public method getChassis {args}
+
+  public method listUsers {}
+  public method userInfo {id}
+  public method addUser {id password name email {group user}}
+  public method removeUser {id}
+  public method updateUser {id args}
+  public method updateProfile {args}
+  public method setL2DataRate {{igoreipg true}}
+
+  public method _getId {} { return [incr _nextid] }
+
+  public method _reserveToken {}
+  public method _exec {cmd}
+  public method _execXml {xml {token {}} {usetimeout true}}
+
+  protected method _channeldata {data}
+  protected method _channelclosed {}
+  protected method _trycallback {cb args}
+  protected method _commandToXml {commandstr}
+  protected method _discoverComponents {}
+  protected method _text {tdom select}
+  protected method _networkDoc {}
+  protected method _testDoc {}
+  public method _testParams {}
+  public method _networkParams {type}
+  protected method _componentDoc {type}
+  public method _componentParams {namespace name}
+  public method _componentGroups {type}
+  public method _schemaver {} { return $_schemaver }
+  protected method _populateShortcuts {}
+  protected method _deleteShortcuts {}
+  protected method _timeout {token}
+  protected method _fixmodel {xmlnode}
+  protected method _strikeDict {xmlnode}
+  protected method _strikeSetDict {xmlnode}
+  protected method _jsessionid {} {return $_jsessionid}
+
+  protected common _getTestResultId {xmlnode}
+  protected common _appendTestResultId {string}
+  protected common _appendIteration {iteration}
+}
+
+namespace eval bps {
+}
+
+proc bps::connect {host userid password args} {
+  uplevel [list bps::BPSConnection #auto $host $userid $password] $args
+}
+
+proc bps::textprogress {channel name percent} {
+  variable _progress_$name
+  upvar 0 _progress_$name state
+  set percent [expr int($percent)]
+  if {$percent < 100} {
+    if {[info exists state] && $state == $percent} {
+      return
+    }
+    set state $percent
+  } else {
+    if {[info exists state]} {
+      unset state
+    } else {
+      return
+    }
+  }
+  global  tcl_platform
+  if {$tcl_platform(platform) == "windows"} {
+    puts -nonewline $channel [format "\n %10s  |" $name]
+  } else {
+    puts -nonewline $channel [format "\r %10s  |" $name]
+  }
+
+  set portion [expr 40.0 * $percent / 100]
+  for {set x 0} {$x <= $portion} {incr x} {
+    puts -nonewline $channel "="
+  }
+  for {} {$x <= 40} {incr x} {
+    puts -nonewline $channel " "
+  }
+  puts -nonewline $channel "| [format "%3d" $percent] %"
+  if {$percent == 100} {
+    puts ""
+  }
+  flush stdout
+  return
+}
+
+proc bps::reportclose {} {
+  puts "connection closed"
+}
+
+itcl::body bps::BPSConnection::constructor {host userid password args} {
+  # these options need to be handled before making the connection
+  foreach arg {port shortcuts onclose checkversion} {
+    set cfgix [lsearch $args -$arg]
+    if {$cfgix != -1 && ($cfgix % 2) == 0 && ([llength $args] % 2) == 0} {
+      configure -$arg [lindex $args [expr $cfgix + 1]]
+    }
+  }
+  set _userid $userid
+
+  if {[catch {
+    # login via HTTPS
+    if {$password != "\0"} {
+        set tok [http::geturl https://$host/gwt/SessionMgr \
+                    -query [eval http::formatQuery [list \
+                        op LOGIN \
+                        userid $userid] \
+                        password $password] ]
+        try {
+            if {[http::status $tok] != "ok"} {
+                error "Unable to make login request"
+            }
+            set data [http::data $tok]
+            if {![regexp {IXSESSIONID=(.*)$} $data junk jsessionid]} {
+                error "Invalid credentials"
+            }
+        } finally {
+            http::cleanup $tok
+        }
+    }
+    set _socket [socket $host $port]
+    set _host [lindex [fconfigure $_socket -peername] 0]
+    set _channel [flash::FlashChannel #auto -inchan $_socket -outchan $_socket]
+    set _connecting 1 
+    $_channel configure -onclose [namespace code [list $this _channelclosed]] \
+			-ondata [namespace code [list $this _channeldata]]
+    set _locale en
+
+    # if you can't login, go no further
+    if {[catch {
+    		dom createDocument login logindoc
+    		$logindoc documentElement loginroot
+    		if {[info exists jsessionid]} {
+    		    $loginroot setAttribute jsessionid $jsessionid
+    		}
+    		$loginroot setAttribute id $userid
+    		$loginroot setAttribute locale $_locale
+        dom parse [_execXml [$logindoc asXML]] doc
+    } err]} {
+    		if {$_connecting == 2} {
+    				error "Connection refused; too many open connections from this IP address" {} TOOMANYCONN
+    		}
+    		global errorCode errorInfo
+    		error $err $errorInfo $errorCode
+    }
+    $doc documentElement root
+    set _schemaver [$root @schemaver 26]
+    set _version [$root @version-primary]
+    set _build [$root @revision-primary]
+    set _strikepack [$root @strikerev-primary]
+    set _jsessionid [$root @jsessionid ""]
+    global bpsh_version
+    if {$checkversion && $bpsh_version != [$root @bpsh_version ""]} {
+      error "BPS device is version [$root @bpsh_version pre-1.2], while this shell is version \n$bpsh_version. Please download a new version of the shell from the device"
+    }
+    set _systemtype [$root @systemType]
+    set globals [_exec "getSystemGlobals"]
+    dom parse $globals doc
+    $doc documentElement root
+    foreach param [$root selectNodes child::*] {
+      set _systemglobal([$param @id]) [[$param selectNode child::node()] asXML]
+    }
+    _discoverComponents
+
+    namespace eval [namespace current]$this {}
+    eval configure $args
+    if {$shortcuts} {
+      _populateShortcuts
+    }
+
+    # set up a working context
+    initContext default -name $name
+    set _connecting 0 
+    set _ping [after 1000 [namespace code [list $this _callping]]]
+  } err]} {
+    if {[namespace exists [namespace current]$this]} {
+    		namespace delete [namespace current]${this}
+    }
+    global errorCode errorInfo
+    set ec $errorCode
+    set ei $errorInfo
+    if {[info exists _channel]} {
+      itcl::delete object $_channel
+    }
+    if {[info exists _socket]} {
+      close $_socket
+    }
+    error $err $ei $ec
+  }
+}
+
+itcl::body bps::BPSConnection::_callping {} {
+    if {[catch {
+	   dom createDocument ping doc
+	  $doc documentElement root
+	  _execXml [$doc asXML] {#connectionEcho}
+    } err]} {
+         puts "ping failed to remote"
+    }
+    set _ping [after 1000 [namespace code [list $this _callping]]]
+}
+
+
+itcl::configbody bps::BPSConnection::timeout {
+		if {![string is integer -strict $timeout]} {
+				error "Invalid timeout \"$timeout\", must be an integer"
+		}
+		if {$timeout <=0 && $timeout != -1} {
+				error "Invalid timeout \"$timeout\", must be greater than zero, or -1 to disable timeout functionality"
+		}
+}
+
+itcl::configbody bps::BPSConnection::shortcuts {
+  if { $shortcuts } {
+    _populateShortcuts
+  } else {
+    _deleteShortcuts
+  }
+}
+
+itcl::body bps::BPSConnection::_populateShortcuts {} {
+  ## See CR1330668:  This function goes through all of the "Presets" or "Templates"
+  ##                 that exist on the system (canned and custom) and creates an
+  ##                 actual function in the shell environment for each of them, so
+  ##                 if you have a preset called "bubba" or "foobar" you will get a
+  ##                 function called "bubba" or "foobar".  This is great, unless the
+  ##                 user happens to name a preset after a reserved word in TCL!!
+  ##                 For example, if you name your preset "set", or "vwait", or "chan",
+  ##                 you will be unable to use the built-in version of this function
+  ##                 because this function will overwrite the definition of the built
+  ##                 in version.  This is very very very bad.  Let's detect this case
+  ##                 and make a slight change of the name to avoid this.
+  foreach comp [concat [dict keys $_component] aggstats] {
+    ## Set "ind" to the index of "[info commands]", which is the current list of all
+    ## built-in functions/commands/reserved words in the TCL language.  If "ind" is
+    ## not -1, then we are trying to overwrite the original function.
+    set ind [lsearch -exact [info commands] $comp]
+    if { $ind != -1 } {
+        ## If "comp" has the same name as a built-in function, simply add "_no_rw"
+        ## to avoid the disastrous behavior
+        append comp "_no_rw"
+    }
+    set val [list proc $comp {name args} \
+      "eval \[list [namespace which $this] createComponent [list $comp] \$name\] \$args"]
+    uplevel #0 $val
+  }
+}
+
+itcl::body bps::BPSConnection::_deleteShortcuts {} {
+  foreach comp [dict keys $_component] {
+    if {[info commands ::$comp] != ""} {
+      rename ::$comp {}
+    }
+  }
+}
+
+itcl::body bps::BPSConnection::destructor {} {
+  if {[info exists _ping]} {
+    after cancel $_ping
+    unset _ping
+  }
+  foreach {ctx obj} [array get _contexts] {
+    _deleteContext $ctx
+  }
+  array unset _contexts
+  if {[info exists _channel]} {
+    itcl::delete object $_channel
+  }
+  if {[info exists _socket]} {
+    close $_socket
+  }
+  namespace delete [namespace current]$this
+}
+
+itcl::configbody bps::BPSConnection::name {
+  if {$name == ""} {
+    error "invalid test name \"\""
+  }
+  if {[info exists _contexts(default)]} {
+      _configureContext default -name $name
+  }
+}
+
+## Everytime we login through the TCL API, we automatically
+## create a "default" test.  This is mainly here for backward
+## compatibility with the old API.  Currently the user will
+## login and execute something like "$bps createTest" to create
+## a test.  The returned object is then used to track the test
+## itself.  The old API just used this "default" test.  The
+## problem is, now that we have restrictions on what a user can
+## do, for example, cannot create a test because of permissions,
+## or a test cannot be created because we are out of space, we
+## need to make sure that any failure to create this "default"
+## test does not prevent us from logging in.  See #14271 and
+## the function createTest() in this file for more details.
+itcl::body bps::BPSConnection::initContext {ctxname args} {
+  _deleteContext $ctxname
+  ## Previous hack replaced with a call to "catch"
+  if {[catch [concat [list $this createTest -name $ctxname] $args] err]} {
+      puts "DEFAULT TEST WAS NOT CREATED, SOME FUNCTIONALITY MIGHT NOT BE AVAILABLE"
+      return
+  }
+  set _contexts($ctxname) $err
+  if {[llength $args] > 0} {
+    if {[catch { eval [list configureContext $ctxname] $args } err ]} {
+      puts "DEFAULT TEST WAS NOT CREATED, SOME FUNCTIONALITY MIGHT NOT BE AVAILABLE"
+      return
+    } 
+  }
+  return $_contexts($ctxname)
+}
+
+itcl::body bps::BPSConnection::deleteContext {ctxname} {
+  if {$ctxname == "default"} {
+    # don't let them completely get rid of default context - just reinitialize
+    # it
+    initContext default -name $name
+  } else {
+    _deleteContext $ctxname
+  }
+}
+
+itcl::body bps::BPSConnection::configureContext {ctxname args} {
+  if {$ctxname == "default"} {
+    eval configure $args
+  } else {
+    eval [list _configureContext $ctxname] $args
+  }
+}
+
+itcl::body bps::BPSConnection::_configureContext {ctxname args} {
+  set optlist {
+    {name.arg \0 "context name"}
+  }
+  array set opts [cmdline::getoptions args $optlist "configureContext options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "configureContext options:"]
+  }
+  if {$opts(name) == ""} {
+    error "invalid test name \"\""
+  }
+  if {![info exists _contexts($ctxname)]} {
+    error "unknown context $ctxname"
+  }
+  $_contexts($ctxname) configure -name $opts(name)
+}
+
+itcl::body bps::BPSConnection::_deleteContext {ctxname} {
+  if {![info exists _contexts($ctxname)]} {
+    return
+  }
+  if {[itcl::find object $_contexts($ctxname)] != ""} {
+    itcl::delete object $_contexts($ctxname)
+  }
+  unset _contexts($ctxname)
+  return
+}
+
+itcl::body bps::BPSConnection::createComponent {args} {
+  array set opts [cmdline::getoptions args {
+    {context.arg default "context"}
+  } "createComponent options:"]
+
+  if {![info exists _contexts($opts(context))]} {
+    error "unknown context \"$opts(context)\""
+  }
+
+  uplevel [list $_contexts($opts(context)) createComponent] $args
+}
+
+itcl::body bps::BPSConnection::getAggStats {args} {
+  array set opts [cmdline::getoptions args {
+    {context.arg default "context"}
+  } "createComponent options:"]
+
+  if {![info exists _contexts($opts(context))]} {
+    error "unknown context \"$opts(context)\""
+  }
+
+  uplevel [list $_contexts($opts(context)) getAggStats]
+}
+
+itcl::body bps::BPSConnection::run {args} {
+  if {[info exists _execAsync]} {
+    error "unable to execute, a test is already running"
+  }
+  set optlist {
+    {context.arg  default "context"}
+    {group.arg  1 "interface group to use"}
+    {async.arg    {} "return immediately, then call the given script upon completion"}
+    {progress.arg {} "script to run with progress notifications"}
+    {rtstats.arg {} "script to run with rtstats notifications"}
+    {flowexceptions.arg {} "script to run with flow exception notifications"}
+    {allowMalware "confirm that malware should be allowed in this test"}
+  }
+  array set opts [cmdline::getoptions args $optlist "run options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "run options:"]
+  }
+  if {![info exists _contexts($opts(context))]} {
+    error "unknown context $opts(context)"
+  }
+  set m {}
+  if {$opts(allowMalware)} {
+    set m -allowMalware
+  }
+  eval [list $_contexts($opts(context)) run -group $opts(group) \
+                                 -async $opts(async) \
+                                 -progress $opts(progress) \
+                                 -rtstats $opts(rtstats) \
+                                 -flowexceptions $opts(flowexceptions)] \
+                                 $m
+}
+
+itcl::body bps::BPSConnection::cancel {{context default}} {
+  if {![info exists _contexts($context)]} {
+    error "unknown context $context"
+  }
+  $_contexts($context) cancel
+}
+
+itcl::body bps::BPSConnection::delete {} {
+    itcl::delete object $this
+}
+
+itcl::body bps::BPSConnection::save {args} {
+  set optlist {
+    {context.arg default "default"}
+    {name.arg \0 "test name"}
+    {file.arg \0 "file name"}
+    {channel.arg \0 "channel name"}
+    {force "force overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+  if {![info exists _contexts($opts(context))]} {
+    error "unknown context $opts(context)"
+  }
+  set cmd [list $_contexts($opts(context)) save -name $opts(name) \
+                                  -file $opts(file) \
+                                  -channel $opts(channel)]
+  if {$opts(force)} {
+  	  lappend cmd -force
+  }
+  eval $cmd
+}
+
+itcl::body bps::BPSConnection::wait {{context default}} {
+  if {[info exists _contexts($context)] 
+      && [$_contexts($context) isPending]} {
+    return [$_contexts($context) wait]
+  } elseif {[info exists _reply(revert)]} {
+    set type revert
+  } elseif {[info exists _reply(install)]} {
+    set type install
+  } else {
+    return
+  }
+  if {$_reply($type) == "pending"} {
+    vwait [itcl::scope _reply($type)]
+  }
+  set ret $_reply($type)
+  unset _reply($type)
+  return $ret
+}
+
+itcl::body bps::BPSConnection::setDut {name {context default}} {
+  if {![info exists _contexts($context)]} {
+    error "unknown context $context"
+  }
+  $_contexts($context) configure -dut $name
+}
+
+itcl::body bps::BPSConnection::getDut {{context default}} {
+  if {![info exists _contexts($context)]} {
+    error "unknown context $context"
+  }
+  $_contexts($context) cget -dut
+}
+
+itcl::body bps::BPSConnection::createNetwork {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "Template for new network"}
+    {name.arg #auto "name for new network"}
+  } "createNetwork options:"]
+  return [uplevel [list bps::NetworkClient [namespace current]${this}::$opts(name) \
+            [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::createNeighborhood {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "Template for new neighborhood"}
+    {name.arg #auto "name for new neighborhood"}
+  } "createNeighborhood options:"]
+  return [uplevel [list bps::NeighborhoodClient [namespace current]${this}::$opts(name) \
+            [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::setNeighborhood {name {context default}} {
+  if {![info exists _contexts($context)]} {
+    error "unknown context $context"
+  }
+  $_contexts($context) configure -neighborhood $name
+}
+
+itcl::body bps::BPSConnection::getNeighborhood {{context default}} {
+  if {![info exists _contexts($context)]} {
+    error "unknown context $context"
+  }
+  $_contexts($context) cget -neighborhood
+}
+
+itcl::body bps::BPSConnection::deleteNeighborhood {args} {
+  set optlist {
+    {force "force delete"}
+  }
+  array set opts [cmdline::getoptions args $optlist "deleteNeighborhood ?options? name\noptions:"]
+  if {[llength $args] != 1} {
+    error [cmdline::usage $optlist "deleteNeighborhood ?options? name\noptions:"]
+  }
+  set name [lindex $args 0]
+  if {$opts(force)} {
+  		set opts(force) "true"
+  } else {
+  		set opts(force) "false"
+  }
+  set ret [_exec [list neighborhoodDelete -name $name -force $opts(force)]]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::getTest {context} {
+  if {![info exists _contexts($context)]} {
+    error "unknown context $context"
+  }
+  return $_contexts($context)
+}
+
+itcl::body bps::BPSConnection::importTest {name args} {
+  set optlist {
+    {file.arg \0 "update file"}
+    {url.arg \0 "url for update file"}
+    {force false "overwrite existing objects"}
+    {progress.arg {bps::textprogress stdout} "script to run with progress notifications"}
+  }
+  array set opts [cmdline::getoptions args $optlist "importTest options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "importTest options:"]
+  }
+  if {$opts(file) != "\0"} {
+    set up [list -file [list uploadFormElement $name $opts(file)]]
+  } elseif {$opts(url) != "\0"} {
+    set up [list -url [list uploadFormElement $name $opts(url)]]
+  } else {
+    error "Either -file or -url must be specified"
+  }
+
+  if {$opts(progress) != ""} {
+    set _execProgress [concat $opts(progress) import]
+  }
+  if {$opts(force)} {
+    set opts(force) "on"
+  } else {
+    set opts(force) "false"
+  }
+  if {[catch {
+    set ret [eval [list multipart::post http://${_host}/gwt/upload/upload \
+      [list Cookie IXSESSIONID=$_jsessionid] \
+      $opts(progress) \
+      -field [list name $name] \
+      -field [list uploadtype model] \
+      -field [list force $opts(force)] \
+      -field [list key $_jsessionid]] \
+      $up]
+  } err]} {
+    global errorCode errorInfo
+    error $err $errorInfo $errorCode
+  }
+  if {[regexp {FAILURE\n(.*)$} $ret junk content]} {
+    error $content
+  }
+  return
+}
+
+itcl::body bps::BPSConnection::createTest {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "template for new test"}
+    {name.arg #auto "name for new test"}
+  } "createTest options:"]
+  if {$opts(template) != ""} {
+    # determine test type
+    dom createDocument modelInfo doc
+    $doc documentElement root
+    $root setAttribute name $opts(template)
+    dom parse [_execXml [$root asXML]] testinfo
+    $testinfo documentElement testroot
+    if {[$testroot hasAttribute testLabType]} {
+        # this is a lab test, create the right kind of special object
+        switch -exact [$testroot @testLabType] {
+            rfc2544 {
+                return [createRFC2544Test]
+            }
+            session {
+                return [createSessionLabTest]
+            }
+
+
+            lawfulintercept {
+                if {$opts(name) == "#auto"} {
+                    set opts(name) ""
+                }
+                return [createLawfulInterceptTest -template $opts(template) -name $opts(name)]
+            }
+            multicast {
+                if {$opts(name) == "#auto"} {
+                    set opts(name) ""
+                }
+                return [createMulticastTest -template $opts(template) -name $opts(name)]
+            }
+            lte {
+                if {$opts(name) == "#auto"} {
+                    set opts(name) ""
+                }
+                return [createLTETest -template $opts(template) -name $opts(name)]
+            }
+            default {
+              # not actually a test lab, just do the default thing
+            }
+        }
+    }
+  }
+  return [uplevel [list bps::TestClient [namespace current]${this}::$opts(name) \
+                [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::deleteTest {name args} {
+  set optlist {
+    {force false "override warnings"}
+  }
+  array set opts [cmdline::getoptions args $optlist "deleteTest options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "deleteTest options:"]
+  }
+  set force {}
+  dom createDocument modelDelete doc
+  $doc documentElement root
+  $root setAttribute name $name
+  if {$opts(force)} {
+    $root setAttribute force true
+  }
+  set ret [_execXml [$doc asXML]]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::createTestSeries {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "template for new test series"}
+    {name.arg #auto "name for new test series"}
+  } "createTestSeries options:"]
+  return [uplevel [list bps::TestSeriesClient [namespace current]${this}::$opts(name) \
+            [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::deleteTestSeries {name} {
+  set ret [_exec [list testPlanDelete -name $name]]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::createMultiboxTest {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "template for new multibox test"}
+    {name.arg #auto "name for new multibox test"}
+  } "createMultiboxTest options:"]
+  return [uplevel [list bps::MultiBoxClient [namespace current]${this}::$opts(name) \
+            [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::deleteMultiboxTest {name} {
+  set ret [_exec [list multiBoxDelete -name $name]]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::createAppProfile {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "template for new app profile"}
+    {name.arg #auto "name for new app profile"}
+  } "createAppProfile options:"]
+  return [uplevel [list bps::AppProfileClient [namespace current]${this}::$opts(name) \
+            [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::deleteAppProfile {args} {
+  set optlist {
+    {force "force delete"}
+  }
+  array set opts [cmdline::getoptions args $optlist "deleteAppProfile ?options? name\noptions:"]
+  if {[llength $args] != 1} {
+    error [cmdline::usage $optlist "deleteAppProfile ?options? name\noptions:"]
+  }
+  set name [lindex $args 0]
+  if {$opts(force)} {
+  		set opts(force) "true"
+  } else {
+  		set opts(force) "false"
+  }
+  set ret [_exec [list appProfileDelete -name $name -force $opts(force)]]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::createSuperflow {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "template for new superflow"}
+    {name.arg #auto "name for new superflow"}
+  } "createSuperflow options:"]
+  return [uplevel [list bps::SuperflowClient [namespace current]${this}::$opts(name) \
+            [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::deleteSuperflow {args} {
+  set optlist {
+    {force "force delete"}
+  }
+  array set opts [cmdline::getoptions args $optlist "deleteSuperflow ?options? name\noptions:"]
+  if {[llength $args] != 1} {
+    error [cmdline::usage $optlist "deleteSuperflow ?options? name\noptions:"]
+  }
+  set name [lindex $args 0]
+  if {$opts(force)} {
+  		set opts(force) "true"
+  } else {
+  		set opts(force) "false"
+  }
+  set ret [_exec [list superFlowDelete -name $name -force $opts(force)]]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::createLoadProfile {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "template for new load profile"}
+    {name.arg #auto "name for new load profile"}
+  } "createLoadProfile options:"]
+  return [uplevel [list bps::LoadProfileClient [namespace current]${this}::$opts(name) \
+            [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::deleteLoadProfile {args} {
+  set optlist {
+    {force "force delete"}
+  }
+  array set opts [cmdline::getoptions args $optlist "deleteLoadProfile ?options? name\noptions:"]
+
+  if {$opts(force)} {
+    set opts(force) true
+  } else {
+    set opts(force) false
+  }
+  if {[llength $args] != 1} {
+    error [cmdline::usage $optlist "deleteLoadProfile ?options? name\noptions:"]
+  }
+  set name [lindex $args 0]
+  set ret [_exec [list removeLoadProfile -name $name -force $opts(force)]]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::createEvasionProfile {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "template for new evasion profile"}
+    {name.arg #auto "name for new evasion profile"}
+  } "createEvasionProfile options:"]
+  return [uplevel [list bps::EvasionProfileClient [namespace current]${this}::$opts(name) \
+            [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::deleteEvasionProfile {args} {
+  set optlist {
+    {force "force delete"}
+  }
+  array set opts [cmdline::getoptions args $optlist "deleteEvasionProfile ?options? name\noptions:"]
+
+  if {$opts(force)} {
+    set opts(force) true
+  } else {
+    set opts(force) false
+  }
+  if {[llength $args] != 1} {
+    error [cmdline::usage $optlist "deleteEvasionProfile ?options? name\noptions:"]
+  }
+  set name [lindex $args 0]
+  set ret [_exec [list attackProfileDelete -name $name -force $opts(force)]]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::createAttackSeries {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "template for new attack series"}
+    {name.arg #auto "name for new attack series"}
+  } "createAttackSeries options:"]
+  return [uplevel [list bps::AttackPlanClient [namespace current]${this}::$opts(name) \
+            [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::deleteAttackSeries {args} {
+  set optlist {
+    {force "force delete"}
+  }
+  array set opts [cmdline::getoptions args $optlist "deleteAttackSeries ?options? name\noptions:"]
+
+  if {$opts(force)} {
+    set opts(force) true
+  } else {
+    set opts(force) false
+  }
+  if {[llength $args] != 1} {
+    error [cmdline::usage $optlist "deleteAttackSeries ?options? name\noptions:"]
+  }
+  set name [lindex $args 0]
+  set ret [_exec [list attackPlanDelete -name $name -force $opts(force)]]
+  return $ret
+}
+
+
+itcl::body bps::BPSConnection::createStrikeList {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "template for new strike list"}
+    {name.arg #auto "name for new strike list"}
+  } "createStrikeList options:"]
+  return [uplevel [list bps::StrikeListClient [namespace current]${this}::$opts(name) \
+            [namespace which $this] $opts(template)]]
+}
+
+itcl::body bps::BPSConnection::deleteStrikeList {args} {
+  set optlist {
+    {force "force delete"}
+  }
+  array set opts [cmdline::getoptions args $optlist "deleteStrikeList ?options? name\noptions:"]
+
+  if {$opts(force)} {
+    set opts(force) true
+  } else {
+    set opts(force) false
+  }
+  if {[llength $args] != 1} {
+    error [cmdline::usage $optlist "deleteStrikeList ?options? name\noptions:"]
+  }
+  set name [lindex $args 0]
+  set ret [_exec [list attackPlanDelete -name $name -force $opts(force)]]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::createRFC2544Test {args} {
+  array set opts [cmdline::getoptions args {
+  } "createRFC2544Test options:"]
+  return [uplevel [list bps::RFC2544Client [namespace current]${this}::#auto \
+            [namespace which $this]]]
+}
+
+itcl::body bps::BPSConnection::createSessionLabTest {args} {
+  array set opts [cmdline::getoptions args {
+  } "createSessionLabTest options:"]
+  return [uplevel [list bps::SessionLabClient [namespace current]${this}::#auto \
+            [namespace which $this]]]
+}
+
+itcl::body bps::BPSConnection::createLawfulInterceptTest {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "Template for new LTE test"}
+    {name.arg {} "Name for new LTE test"}
+  } "createLawfulInterceptTest options:"]
+  if {$opts(name) == ""} {
+    set nameargs {}
+  } else {
+    set nameargs [list -name $opts(name)]
+  }
+  return [uplevel [list bps::LawfulInterceptClient [namespace current]${this}::#auto \
+            [namespace which $this] $opts(template)] $nameargs]
+}
+
+itcl::body bps::BPSConnection::createMulticastTest {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "Template for new LTE test"}
+    {name.arg {} "Name for new LTE test"}
+  } "createMulticastTest options:"]
+  if {$opts(name) == ""} {
+    set nameargs {}
+  } else {
+    set nameargs [list -name $opts(name)]
+  }
+  return [uplevel [list bps::MulticastClient [namespace current]${this}::#auto \
+            [namespace which $this] $opts(template)] $nameargs]
+}
+
+itcl::body bps::BPSConnection::createLTETest {args} {
+  array set opts [cmdline::getoptions args {
+    {template.arg {} "Template for new LTE test"}
+    {name.arg {} "Name for new LTE test"}
+  } "createLTETest options:"]
+  if {$opts(name) == ""} {
+      set nameargs {}
+  } else {
+      set nameargs [list -name $opts(name)]
+  }
+  return [uplevel [list bps::LTEClient [namespace current]${this}::#auto \
+            [namespace which $this] $opts(template)] $nameargs]
+}
+
+itcl::body bps::BPSConnection::createResiliencyTest {args} {
+  return [uplevel [list bps::ResiliencyClient [namespace current]${this}::#auto \
+            [namespace which $this]] $args]
+}
+
+itcl::body bps::BPSConnection::createServerResiliencyTest {args} {
+  return [uplevel [list bps::ServerResiliencyClient [namespace current]${this}::#auto \
+            [namespace which $this]] $args]
+}
+
+itcl::body bps::BPSConnection::importStrikelist {name args} {
+  set optlist {
+    {file.arg \0 "update file"}
+    {force false "overwrite existing objects"}
+    {exportsize.arg "" "Limit on process data"}
+    {exportunit.arg "megabytes" "Type for the given size limit - one of \"megabytes\" or \"frames\""}
+    {progress.arg {bps::textprogress stdout} "script to run with progress notifications"}
+  }
+  array set opts [cmdline::getoptions args $optlist "importStrikelist options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "importStrikelist options:"]
+  }
+  if {$opts(file) != "\0"} {
+    set up [list -file [list uploadFormElement file $opts(file)]]
+  } else {
+    error "Either -file must be specified"
+  }
+
+  if {$opts(progress) != ""} {
+    set _execProgress [concat $opts(progress) import]
+  }
+  if {$opts(force)} {
+    set opts(force) "on"
+  } else {
+    set opts(force) "false"
+  }
+  if {$opts(exportsize) != ""
+        && (![string is integer $opts(exportsize)] || $opts(exportsize) < 0)} {
+    error "Export size must be a positive integer"
+  }
+  if {[lsearch {megabytes frames} $opts(exportunit)] == -1} {
+    error "-exportunit must be one of 'megabytes' or 'frames', if specified"
+  }
+  set extrafields {}
+  if {$opts(exportsize) != ""} {
+    lappend extrafields -field [list exportsize "$opts(exportsize)$opts(exportunit)"]
+  }
+  set _reply(attackplanImport) pending
+  if {[catch {
+    set ret [eval [list multipart::post http://${_host}/gwt/upload/upload \
+      [list Cookie IXSESSIONID=$_jsessionid] \
+      $opts(progress) \
+      -field [list name $name] \
+      -field [list uploadtype attackplan] \
+      -field [list force $opts(force)] \
+      {*}$extrafields \
+      -field [list key $_jsessionid]] \
+      $up]
+  } err]} {
+    global errorCode errorInfo
+    error $err $errorInfo $errorCode
+  }
+  if {[regexp {FAILURE\n(.*)$} $ret junk content]} {
+    error $content
+  }
+  set ret $_reply(attackplanImport)
+  unset _reply(attackplanImport)
+  foreach {status data} $ret break
+  if {$status == "error"} {
+  		dom parse $data doc
+  		$doc documentElement root
+  		set detail [$root selectNodes detail/child::node()]
+  		if {$detail != ""} {
+  				set detail [$detail asXML]
+  		}
+  		error $detail {} [$root @id RUNTIME_ERROR]
+  }
+  return
+}
+
+itcl::body bps::BPSConnection::importPcap {name args} {
+  set optlist {
+    {file.arg \0 "update file"}
+    {url.arg \0 "url for update file"}
+    {force false "overwrite existing objects"}
+    {bpffilter.arg "" "BPF formatted filter to apply when importing"}
+    {exportsize.arg "" "Limit on process data"}
+    {exportunit.arg "megabytes" "Type for the given size limit - one of \"megabytes\" or \"frames\""}
+    {progress.arg {bps::textprogress stdout} "script to run with progress notifications"}
+  }
+  array set opts [cmdline::getoptions args $optlist "importPcap options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "importPcap options:"]
+  }
+  if {$opts(file) != "\0"} {
+    set up [list -file [list uploadFormElement $name $opts(file)]]
+  } elseif {$opts(url) != "\0"} {
+    set up [list -url [list uploadFormElement $name $opts(url)]]
+  } else {
+    error "Either -file or -url must be specified"
+  }
+
+  if {$opts(progress) != ""} {
+    set _execProgress [concat $opts(progress) import]
+  }
+  if {$opts(force)} {
+    set opts(force) "on"
+  } else {
+    set opts(force) "false"
+  }
+  if {$opts(exportsize) != "" 
+        && (![string is integer $opts(exportsize)] || $opts(exportsize) < 0)} {
+    error "Export size must be a positive integer"
+  }
+  if {[lsearch {megabytes frames} $opts(exportunit)] == -1} {
+    error "-exportunit must be one of 'megabytes' or 'frames', if specified"
+  }
+  set extrafields {}
+  if {$opts(bpffilter) != ""} {
+    lappend extrafields -field [list bpffilter $opts(bpffilter)]
+  }
+  if {$opts(exportsize) != ""} {
+    lappend extrafields -field [list exportsize "$opts(exportsize)$opts(exportunit)"]
+  }
+  set _reply(captureImport) pending
+  if {[catch {
+    set ret [eval [list multipart::post http://${_host}/gwt/upload/upload \
+      [list Cookie IXSESSIONID=$_jsessionid] \
+      $opts(progress) \
+      -field [list name $name] \
+      -field [list uploadtype capture] \
+      -field [list force $opts(force)] \
+      {*}$extrafields \
+      -field [list key $_jsessionid]] \
+      $up]
+  } err]} {
+    global errorCode errorInfo
+    error $err $errorInfo $errorCode
+  }
+  if {[regexp {FAILURE\n(.*)$} $ret junk content]} {
+    error $content
+  }
+  if {$_reply(captureImport) == "pending"} {
+      vwait [itcl::scope _reply(captureImport)]
+  }
+  set ret $_reply(captureImport)
+  unset _reply(captureImport)
+  foreach {status data} $ret break
+  if {$status == "error"} {
+  		dom parse $data doc
+  		$doc documentElement root
+  		set detail [$root selectNodes detail/child::node()]
+  		if {$detail != ""} {
+  				set detail [$detail asXML]
+  		}
+  		error $detail {} [$root @id RUNTIME_ERROR]
+  }
+  return
+}
+
+itcl::body bps::BPSConnection::importLicense {args} {
+  set optlist {
+    {file.arg \0 "license file"}
+    {url.arg \0 "url for license file"}
+    {progress.arg {bps::textprogress stdout} "script to run with progress notifications"}
+  }
+  array set opts [cmdline::getoptions args $optlist "importLicense options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "importLicense options:"]
+  }
+  if {$opts(file) != "\0"} {
+    set up [list -file [list uploadFormElement license $opts(file)]]
+  } elseif {$opts(url) != "\0"} {
+    set up [list -url [list uploadFormElement license $opts(url)]]
+  } else {
+    error "Either -file or -url must be specified"
+  }
+
+  if {$opts(progress) != ""} {
+    set _execProgress [concat $opts(progress) import]
+  }
+  if {[catch {
+    set ret [eval [list multipart::post http://${_host}/gwt/upload/upload \
+      [list Cookie IXSESSIONID=$_jsessionid] \
+      $opts(progress) \
+      -field [list uploadtype license] \
+      -field [list key $_jsessionid]] \
+      $up]
+  } err]} {
+    global errorCode errorInfo
+    error $err $errorInfo $errorCode
+  }
+  if {[regexp {FAILURE\n(.*)$} $ret junk content]} {
+    error $content
+  }
+  return
+}
+
+itcl::body bps::BPSConnection::getLicenses {} {
+		set licenses [_exec getLicenses]
+		dom parse $licenses doc
+		$doc documentElement root
+		set ret {}
+		foreach node [$root selectNodes license] {
+				set item {}
+				foreach attr [$node attributes] {
+						lappend item $attr [$node @$attr]
+				}
+				lappend ret $item
+		}
+		return $ret
+}
+
+itcl::body bps::BPSConnection::iluGetLicenses {server} {
+	dom createDocument iluGetLicenses doc
+	$doc documentElement root
+	$root setAttribute server $server
+	set licenses [_execXml [$doc asXML]]
+	dom parse $licenses doc
+	$doc documentElement root
+	puts [$root asXML]
+	return
+}
+
+itcl::body bps::BPSConnection::iluGetLicenseServers {} {
+	dom createDocument iluGetLicenseServers doc
+	$doc documentElement root
+	set licenseServers [_execXml [$doc asXML]]
+	dom parse $licenseServers doc
+	$doc documentElement root
+	puts [$root asXML]
+	return
+}
+
+itcl::body bps::BPSConnection::iluAddLicenseServers {args} {
+	dom createDocument iluAddLicenseServers doc
+	$doc documentElement root
+  foreach l $args {
+          set node [$doc createElement server]
+          $node setAttribute id $l
+          $root appendChild $node
+  }
+  set addLicenseServers [_execXml [$doc asXML]]
+	return
+}
+
+itcl::body bps::BPSConnection::iluDeleteLicenseServers {args} {
+	dom createDocument iluDeleteLicenseServers doc
+	$doc documentElement root
+  foreach l $args {
+          set node [$doc createElement server]
+          $node setAttribute id $l
+          $root appendChild $node
+  }
+  set delLicenseServers [_execXml [$doc asXML]]
+	return
+}
+
+itcl::body bps::BPSConnection::iluGetHostId {server} {
+	dom createDocument iluGetHostId doc
+	$doc documentElement root
+	$root setAttribute server $server
+	set hostId [_execXml [$doc asXML]]
+	dom parse $hostId doc
+	$doc documentElement root
+	puts [$root asXML]
+	return
+}
+
+itcl::body bps::BPSConnection::iluLicActivation {actCode quantity server} {
+	dom createDocument iluLicActivation doc
+	$doc documentElement root
+  $root setAttribute activationCode $actCode
+  $root setAttribute quantity $quantity
+	$root setAttribute server $server
+	set licAct [_execXml [$doc asXML]]
+	dom parse $licAct doc
+	$doc documentElement root
+	puts [$root asXML]
+	return
+}
+
+itcl::body bps::BPSConnection::iluLicDeactivation {actCode quantity server} {
+	dom createDocument iluLicDeactivation doc
+	$doc documentElement root
+  $root setAttribute activationCode $actCode
+  $root setAttribute quantity $quantity
+	$root setAttribute server $server
+	set licDeact [_execXml [$doc asXML]]
+	dom parse $licDeact doc
+	$doc documentElement root
+	puts [$root asXML]
+	return
+}
+
+itcl::body bps::BPSConnection::iluLicSync {server} {
+	dom createDocument iluLicSync doc
+	$doc documentElement root
+	$root setAttribute server $server
+	set licSync [_execXml [$doc asXML]]
+	dom parse $licSync doc
+	$doc documentElement root
+	puts [$root asXML]
+	return
+}
+
+itcl::body bps::BPSConnection::iluGetFloatingStats {server} {
+	dom createDocument iluGetFloatingStats doc
+	$doc documentElement root
+	$root setAttribute server $server
+	set floatingStats [_execXml [$doc asXML]]
+	dom parse $floatingStats doc
+	$doc documentElement root
+	puts [$root asXML]
+	return
+}
+
+itcl::body bps::BPSConnection::iluImportLicenseFile {importFilePath server} {
+	dom createDocument iluImportLicenseFile doc
+	$doc documentElement root
+	$root setAttribute importFilePath $importFilePath
+	$root setAttribute server $server
+	set offlineImportLicense [_execXml [$doc asXML]]
+	dom parse $offlineImportLicense doc
+	$doc documentElement root
+	puts [$root asXML]
+	return
+}
+
+itcl::body bps::BPSConnection::iluGetVersion {} {
+	dom createDocument iluGetVersion doc
+	$doc documentElement root
+	set version [_execXml [$doc asXML]]
+	dom parse $version doc
+	$doc documentElement root
+	puts [$root asXML]
+	return
+}
+
+itcl::body bps::BPSConnection::resultId {{context default}} {
+  if {![info exists _contexts($context)]} {
+    error "No results available"
+  }
+  return [$_contexts($context) resultId]
+}
+
+itcl::body bps::BPSConnection::clearResults {{context default}} {
+  if {[info exists _contexts($context)]} {
+    $_contexts($context) clearResults
+  }
+  return
+}
+
+itcl::body bps::BPSConnection::getSystemGlobal {varname} {
+  return $_systemglobal($varname)
+}
+
+itcl::body bps::BPSConnection::getReportComponents {testid  {iterations {}}} {
+    dom createDocument GetReportSectionData doc
+    $doc documentElement root
+    $root setAttribute getTableOfContents true
+    $root appendFromScript {
+        _appendTestResultId $testid 
+    }
+    foreach iteration $iterations {
+	    $root appendFromScript {
+	        _appendIteration $iteration
+	    }
+    }
+    dom parse [_execXml [$doc asXML]] doc
+    $doc documentElement root
+
+    set ret {}
+    foreach row [$root selectNodes //row] {
+        if {[$row hasAttribute componentType] 
+            && [lsearch $ret [$row @componentType]] == -1} {
+            lappend ret [$row @componentType]
+        }
+    }
+    return $ret
+}
+
+itcl::body bps::BPSConnection::getReportContents {testid args} {
+    set optlist {
+        {component.arg \0 "test component"}
+        {iterations.arg {} "comparison iterations"}
+    }
+    array set opts [cmdline::getoptions args $optlist "getReportContents options"]
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "getReportContents options:"]
+    }
+    dom createDocument GetReportSectionData doc
+    $doc documentElement root
+    $root setAttribute getTableOfContents true
+    $root appendFromScript {
+        _appendTestResultId $testid
+    }
+    foreach iteration $opts(iterations) {
+	    $root appendFromScript {
+	        _appendIteration $iteration
+	    }
+    }
+    dom parse [_execXml [$doc asXML]] doc
+    $doc documentElement root
+
+    set ret {}
+    foreach row [$root selectNodes //row] {
+        set sectionnode [$row selectNodes {urlCell[1]}]
+        set section [$sectionnode @anchorText ""]
+        set titlenode [$row selectNodes {urlCell[2]}]
+        if {$opts(component) != "\0"} {
+            if {![$row hasAttribute componentType]} {
+                continue
+            }
+            if {[$row @componentType] != $opts(component)} {
+                continue
+            }
+        }
+        dict set ret $section {}
+        dict set ret $section title [$titlenode @anchorText]
+        if {[$row hasAttribute componentType]} {
+            dict set ret $section component [$row @componentType]
+        }
+    }
+    return $ret
+}
+
+itcl::body bps::BPSConnection::getReportSectionXML {testid args} {
+    set optlist {
+        {section.arg \0 "section ID"}
+        {component.arg \0 "component ID"}
+        {title.arg \0 "section title"}
+        {offset.arg 0 "starting row offset"}
+        {limit.arg 2500 "number of rows returned (max of 2500)"}
+        {iterations.arg {} "comparison iterations"}
+    }
+    array set opts [cmdline::getoptions args $optlist "getReportSection options"]
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "getReportSection options:"]
+    }
+    dom createDocument GetReportSectionData doc
+    $doc documentElement root
+    if {$opts(section) != "\0"} {
+        set section $opts(section)
+    } elseif {$opts(title) != "\0"} {
+        set found false
+        dict for {section data} [getReportContents $testid -component $opts(component)] {
+            if {[dict get $data title] == $opts(title)} {
+                set found true
+                break
+            }
+        }
+        if {!$found} {
+            error "section not found"
+        }
+    } else {
+        error "Either -section or -title must be specified"
+    }
+    if {$opts(offset) != "\0"} {
+        $root setAttribute startRow $opts(offset)
+    }
+    if {$opts(limit) != "\0"} {
+        $root setAttribute rowCount $opts(limit)
+    }
+    $root setAttribute sectionId $section
+    $root appendFromScript {
+        _appendTestResultId $testid
+    }
+    foreach iteration $opts(iterations) {
+	    $root appendFromScript {
+	        _appendIteration $iteration
+	    }
+    }
+    dom parse [_execXml [$doc asXML]] doc
+    $doc documentElement root
+
+    return [$root asXML]
+}
+
+itcl::body bps::BPSConnection::getReportTable {testid args} {
+    set optlist {
+        {section.arg \0 "section ID"}
+        {component.arg \0 "component ID"}
+        {title.arg \0 "section title"}
+        {table.arg 1 "table index within section"}
+        {offset.arg 0 "starting row offset"}
+        {limit.arg 2500 "number of rows returned (max of 2500)"}
+        {iterations.arg {} "comparison testids"}
+    }
+    array set opts [cmdline::getoptions args $optlist "getReportTable options"]
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "getReportTable options:"]
+    }
+    dom parse [getReportSectionXML $testid \
+                                   -iterations $opts(iterations) \
+                                   -section $opts(section) \
+                                   -component $opts(component) \
+                                   -title $opts(title) \
+                                   -offset $opts(offset) \
+                                   -limit $opts(limit)] doc
+    $doc documentElement root
+    set tablenode [$root selectNodes "//table\[$opts(table)\]"]
+    if {$tablenode == ""} {
+        error "Table not found"
+    }
+    set ret {}
+    if {[$tablenode hasAttribute totalSectionRowCount]} {
+        lappend ret total [$tablenode @totalSectionRowCount]
+    }
+    lappend ret offset [$tablenode @startRow 0]
+    if {[$tablenode hasAttribute endRow]} {
+        lappend ret end [$tablenode @endRow]
+    }
+    if {[$tablenode selectNodes {//cell[@dbColumnName]}] != ""} {
+        dict set ret type summary
+        # this is a summary table, not a series. Return the values as a
+        # dictionary.
+        foreach rownode [$tablenode selectNodes row] {
+            set field [$rownode selectNodes {cell[1]}]
+            set cellnode [$rownode selectNodes {cell[2]}]
+            	set found [$cellnode @ncontent ""]
+            	foreach externalForm [$cellnode selectNodes fcontent/externalForm] {
+            		set found [$externalForm text]
+            	}
+            	foreach content [$cellnode selectNodes content] {
+            		set found [$content text]
+            	}
+            dict set ret [$field @dbColumnName] $found
+        }
+    } else {
+        dict set ret type series
+        foreach rownode [$tablenode selectNodes row] {
+            foreach cellnode [$rownode selectNodes cell|urlCell] {
+            	set found [$cellnode @ncontent ""]
+            	foreach externalForm [$cellnode selectNodes fcontent/externalForm] {
+            		set found [$externalForm text]
+            	}
+            	foreach content [$cellnode selectNodes content] {
+            		set found [$content text]
+            	}
+            	if {[$cellnode hasAttribute dbColumnName]} {
+                    lappend series([$cellnode @colId]) [$cellnode @dbColumnName]
+                } elseif {[$cellnode hasAttribute anchorText]} {
+                    lappend series([$cellnode @colId]) [$cellnode @anchorText]
+                } else {
+                    lappend series([$cellnode @colId]) $found
+                }
+            }
+        }
+        foreach header [$tablenode selectNodes header] {
+            lappend ret [$header @name] $series([$header @id])
+        }
+    }
+    return $ret
+}
+
+itcl::body bps::BPSConnection::listTestResults {args} {
+  set optlist {
+    {class.arg \0 "Only return test results from this class of test (single / resiliency / series / multi )"}
+    {name.arg \0 "Only return test results from this test"}
+    {host.arg \0 "Only return test results from this host"}
+    {internalid.arg \0 "Only return test results having this internal id"}
+    {iteration.arg \0 "Only return test results having this iteration number"}
+    {userid.arg \0 "Only return test results from tests run by specified user"}
+    {result.arg \0 "Only return tests that completed with this result"}
+    {dut.arg \0 "Only return tests results using this DUT"}
+    {network.arg \0 "Only return tests results using this network"}
+    {offset.arg 0 "offset into results"}
+    {limit.arg 100 "limit results"}
+    {sort.arg \0 "sort column"}
+    {sortorder.arg \0 "sort order (ascending / descending)"}
+  }
+  array set opts [cmdline::getoptions args $optlist "listTestResults options"]
+
+  if {[lsearch {\0 single resiliency series multi} $opts(class)] == -1} {
+    error "-class must be one of 'single', 'resiliency', 'series', or 'multi', if specified"
+  }
+  if {$opts(sortorder) != "\0"} {
+    if {$opts(sort) == "\0"} {
+        error "When -sortorder is specified, -sort must also be specified"
+    }
+    if {[lsearch {ascending descending} $opts(sortorder)] == -1} {
+      error "-sortorder must be one of 'ascending' or 'descending'"
+    }
+  }
+  set searchstring $args
+
+  dom createDocument searchReports doc
+  $doc documentElement root
+  $root setAttribute limit $opts(limit)
+  $root setAttribute offset $opts(offset)
+
+  foreach opt {sort sortorder} {
+    if {[info exists opts($opt)] && $opts($opt) != "\0"} {
+      $root setAttribute $opt $opts($opt)
+    }
+  }
+
+  foreach opt {class name host internalid iteration userid result dut network} {
+    if {[info exists opts($opt)] && $opts($opt) != "\0"} {
+      set optname $opt
+      set tt $opts($opt)
+      if {$optname == "class"} {
+          set optname "testtype"
+          if {$tt == "single"} {
+          	append searchstring " testtype:test subresiliency:false"
+          }
+          if {$tt == "multi"} {
+          	append searchstring " testtype:multibox"
+          }
+          if {$tt == "series"} {
+          	append searchstring " testtype:plan"
+          }
+          if {$tt == "resiliency"} {
+          	append searchstring " subresiliency:true"
+          }
+      } else {
+          append searchstring " $optname:$tt"
+      }
+    }
+  }
+  $root appendFromScript {
+    domNode::searchString {
+        domNode::text $searchstring
+    }
+  }
+
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+
+  set ret {}
+  foreach item [$root selectNodes child::*] {
+    set idnode [$item selectNodes {child::*[1]}]
+    foreach {idstring type id name} [_getTestResultId $idnode] break
+    lappend ret $idstring [list \
+        type $type \
+        id $id \
+        host [$idnode @host] \
+        name $name \
+        iteration [$idnode @iteration] \
+        result [$item @result incomplete] \
+        starttime [$item @starttime ""] \
+        duration [$item @duration ""] \
+        dut [$item @dut ""] \
+        neighborhood [$item @network ""] \
+        user [$item @user ""] \
+    ]
+  }
+  return $ret
+}
+
+itcl::body bps::BPSConnection::deleteTestResults {args} {
+  set optlist {
+    {force "force delete"}
+  }
+  array set opts [cmdline::getoptions args $optlist "deleteTestResults ?options?  id\noptions:"]
+  if {[llength $args] != 1} {
+    error [cmdline::usage $optlist "deleteTestResults ?options? id\noptions:"]
+  }
+  dom createDocument deleteReport doc
+  $doc documentElement root
+  if {$opts(force)} {
+  	  $root setAttribute "force" "true"
+  }
+  $root appendFromScript {
+      _appendTestResultId [lindex $args 0]
+  }
+  _execXml [$doc asXML] "" false
+}
+
+itcl::body bps::BPSConnection::listAppProfiles {args} {
+  return [_callNamesAPI "app profiles" listAppProfiles searchAppProfiles appprofile $args]
+}
+
+itcl::body bps::BPSConnection::listSuperflows {args} {
+  return [_callNamesAPI "superflows" listSuperflows searchSuperflows superflow $args]
+}
+
+itcl::body bps::BPSConnection::listProtocols {args} {
+  set optlist {
+    {offset.arg 0 "offset into results"}
+    {limit.arg 1000 "limit results"}
+  }
+  array set opts [cmdline::getoptions args $optlist "listProtocols options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "listProtocols options:"]
+  }
+
+  dom createDocument cannedFlowNames doc
+  $doc documentElement root
+  $root setAttribute limit $opts(limit)
+  $root setAttribute offset $opts(offset)
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+
+  set ret {}
+  foreach item [$root selectNodes flow] {
+    if {![$item @deprecate false]} {
+      lappend ret [$item @name]
+    }
+  }
+  return $ret
+}
+
+itcl::body bps::BPSConnection::listDUTs {args} {
+  return [_callNamesAPI "devices" listDUTs searchDuts dut $args]
+}
+
+itcl::body bps::BPSConnection::listTests {args} {
+  return [_callNamesAPI "tests" listTests searchTestModels testmodel $args]
+}
+
+itcl::body bps::BPSConnection::listTestSeries {args} {
+  return [_callNamesAPI "test series" listTestSeries testPlanNames testplan $args]
+}
+
+itcl::body bps::BPSConnection::listMultiboxTests {args} {
+  return [_callNamesAPI "multibox tests" listMultiboxTests multiBoxNames multibox $args]
+}
+
+itcl::body bps::BPSConnection::listNeighborhoods {args} {
+  return [_callNamesAPI "neighborhoods" listNeighborhoods searchNetworks network $args]
+}
+
+itcl::body bps::BPSConnection::listAttackProfiles {args} {
+  return [_callNamesAPI "evasion profiles" listAttackProfiles \
+          attackProfileNames attackprofile $args]
+}
+
+itcl::body bps::BPSConnection::listEvasionProfiles {args} {
+  return [_callNamesAPI "evasion profiles" listEvasionProfiles \
+          attackProfileNames attackprofile $args]
+}
+
+itcl::body bps::BPSConnection::listAttackSeries {args} {
+  return [_callNamesAPI "attack series" listAttackSeries \
+            attackPlanNames attackplan $args]
+}
+
+itcl::body bps::BPSConnection::listStrikes {args} {
+  set optlist {
+    {keywords.arg \0 "list of keywords"}
+    {reference.arg \0 "references"}
+    {protocol.arg \0 "protocol"}
+    {top.arg \0 "only return strikes below this path"}
+    {depth.arg -1 "only return strikes within this many levels of the top"}
+    {offset.arg 0 "offset into results"}
+    {limit.arg 100 "limit results"}
+  }
+  array set opts [cmdline::getoptions args $optlist "listStrikes options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "listStrikes options:"]
+  }
+  set opts(keywords) [join $opts(keywords) |]
+
+  dom createDocument listStrikes doc
+  $doc documentElement root
+  $root setAttribute limit $opts(limit)
+  $root setAttribute offset $opts(offset)
+
+  foreach opt {keywords reference protocol top depth} {
+    if {[info exists opts($opt)] && $opts($opt) != "\0"} {
+      $root setAttribute $opt $opts($opt)
+    }
+  }
+
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+
+  set ret {}
+  foreach item [$root selectNodes strike] {
+    set str [$item @path]
+    dict set ret $str [_strikeDict $item]
+  }
+  return $ret
+}
+
+itcl::body bps::BPSConnection::listStrikeSets {args} {
+  set optlist {
+    {keywords.arg \0 "list of keywords"}
+    {reference.arg \0 "references"}
+    {protocol.arg \0 "protocol"}
+    {top.arg \0 "only return strikes below this path"}
+    {depth.arg -1 "only return strikes within this many levels of the top"}
+    {offset.arg 0 "offset into results"}
+    {limit.arg 100 "limit results"}
+  }
+  array set opts [cmdline::getoptions args $optlist "listStrikeSets options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "listStrikeSets options:"]
+  }
+  set opts(keywords) [join $opts(keywords) |]
+
+  dom createDocument listStrikeSets doc
+  $doc documentElement root
+  $root setAttribute limit $opts(limit)
+  $root setAttribute offset $opts(offset)
+
+  foreach opt {keywords reference protocol top depth} {
+    if {[info exists opts($opt)] && $opts($opt) != "\0"} {
+      $root setAttribute $opt $opts($opt)
+    }
+  }
+
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+
+  set ret {}
+  foreach item [$root selectNodes category] {
+    set str [$item @id]
+    dict set ret $str [_strikeSetDict $item]
+  }
+  return $ret
+}
+
+itcl::body bps::BPSConnection::searchStrikes {args} {
+  set optlist {
+    {offset.arg 0 "offset into results"}
+    {limit.arg 100 "limit results"}
+    {data.arg true "include strike data in results"}
+  }
+  array set opts [cmdline::getoptions args $optlist "searchStrikes options"]
+  if {[llength $args] > 1} {
+    error [cmdline::usage $optlist "searchStrikes options:"]
+  }
+
+  dom createDocument searchStrikes doc
+  $doc documentElement root
+  $root setAttribute limit $opts(limit)
+  $root setAttribute offset $opts(offset)
+
+  $root appendFromScript {
+  		domNode::searchString {
+  		    domNode::text [lindex $args 0]
+  		}
+  }
+
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+
+  set ret {}
+  foreach item [$root selectNodes strike] {
+    set str [$item @path]
+    if {$opts(data)} {
+        dict set ret $str [_strikeDict $item]
+    } else {
+    		lappend ret $str
+    }
+  }
+  return $ret
+}
+
+itcl::body bps::BPSConnection::searchStrikeLists {args} {
+  set optlist {
+    {offset.arg 0 "offset into results"}
+    {limit.arg 100 "limit results"}
+  }
+  array set opts [cmdline::getoptions args $optlist "searchStrikeLists options"]
+  if {[llength $args] > 1} {
+    error [cmdline::usage $optlist "searchStrikeLists options:"]
+  }
+
+  dom createDocument searchStrikeLists doc
+  $doc documentElement root
+  $root setAttribute limit $opts(limit)
+  $root setAttribute offset $opts(offset)
+
+  $root appendFromScript {
+  		domNode::searchString {
+  		    domNode::text [lindex $args 0]
+  		}
+  }
+
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+
+  set ret {}
+  foreach item [$root selectNodes attackplan] {
+    set str [$item @name]
+    dict set ret $str author [$item @author "BreakingPoint"]
+    set time [$item @createdOn ""]
+    if {$time != ""} {
+    		set time [clock format [clock scan [string map {- {} : {}} [regsub {\.[0-9]{3}} $time {}]]]]
+    }
+    dict set ret $str created $time
+    set time [$item @timestamp ""]
+    if {$time != ""} {
+    		set time [clock format [clock scan [string map {- {} : {}} [regsub {\.[0-9]{3}} $time {}]]]]
+    }
+    dict set ret $str modified $time
+    dict set ret $str numStrikes [$item @numStrikes 0]
+  }
+  return $ret
+}
+
+itcl::body bps::BPSConnection::listStrikeKeywords {} {
+  dom createDocument listKeywords doc
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+  set ret {}
+  foreach kw [$root selectNodes keyword] {
+    lappend ret [$kw @name]
+  }
+  return $ret
+}
+
+itcl::body bps::BPSConnection::getStrikeInfo {strike} {
+  dom createDocument strikeInfo doc
+  $doc documentElement root
+  $root setAttribute id $strike
+
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+
+  return [_strikeDict $root]
+}
+
+itcl::body bps::BPSConnection::getStrikeSetInfo {strikeset} {
+  dom createDocument strikeSetInfo doc
+  $doc documentElement root
+  $root setAttribute id $strikeset
+
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+
+  return [_strikeSetDict $root]
+}
+
+itcl::body bps::BPSConnection::listLoadProfiles {args} {
+  return [_callNamesAPI "load profiles" listLoadProfiles \
+            listLoadProfiles profile $args]
+}
+
+itcl::body bps::BPSConnection::_callNamesAPI {desc cmd rcmd node arglist} {
+  set optlist [list \
+    [list sort.arg "name" "sort order"] \
+    [list sortorder.arg "ascending" "sort order"] \
+    [list userid.arg \0 "Only return $desc last edited by specified user"] \
+    [list class.arg \0 "Only return this class of $desc (custom / canned)"] \
+    [list timeinterval.arg \0 "Number of units into the past (default: any time)"] \
+    [list timeunit.arg \0 "Size of the time units specified in -timeinterval (day / week)"] \
+    [list offset.arg 0 "offset into results"] \
+    [list limit.arg 1000 "limit results"] \
+  ]
+  array set opts [cmdline::getoptions arglist $optlist "$cmd options"]
+  if {![string match {search*} $rcmd]
+      && [llength $arglist] > 0} {
+    error [cmdline::usage $optlist "$cmd options:"]
+  }
+
+  if {[lsearch {\0 canned custom} $opts(class)] == -1} {
+    error "-class must be one of 'canned' or 'custom', if specified"
+  }
+
+  if {[lsearch {\0 day week} $opts(timeunit)] == -1} {
+    error "-timeunit must be one of 'day' or 'week', if specified"
+  }
+
+  if {[lsearch {\0 ascending descending} $opts(sortorder)] == -1} {
+    error "-sortorder must be one of 'ascending' or 'descending'"
+  }
+
+  set ret {}
+  if {[string match search* $rcmd]} {
+    # translate from attribute-style to search string style
+    if {$opts(class) != "\0"} {
+        lappend arglist class:$opts(class)
+    }
+    if {$opts(userid) != "\0"} {
+        lappend arglist author:$opts(userid)
+    }
+  }
+  
+      dom createDocument $rcmd rdoc
+      $rdoc documentElement root
+	
+	  foreach opt {sort sortorder
+	       offset limit
+	       userid class timeinterval timeunit sort sortorder} {
+	    if {[info exists opts($opt)] && $opts($opt) != "\0"} {
+	      $root setAttribute $opt $opts($opt)
+	    }
+	  }
+	  if {[llength $arglist] > 0} {
+          $root appendFromScript {
+  		        domNode::searchString {
+  		            domNode::text [join $arglist]
+  		        }
+          }
+      }
+	
+	  set retxml [_execXml [$rdoc asXML]]
+	  dom parse $retxml doc
+	  $doc documentElement retroot
+
+	  foreach item [$retroot selectNodes $node] {
+	    if {[$item hasAttribute name]} {
+	      lappend ret [$item @name]
+	    } else {
+	      lappend ret [[$item selectNodes child::node()] asXML]
+	    }
+	  }
+	  
+   return $ret
+}
+
+itcl::body bps::BPSConnection::factoryRevert {args} {
+  if {[info exists _execAsync]} {
+    error "unable to execute, a test is running"
+  }
+  set optlist {
+    {async.arg    {} "return immediately, then call the given script upon completion"}
+    {progress.arg {} "script to run with progress notifications"}
+  }
+  array set opts [cmdline::getoptions args $optlist "factoryRevert options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "factoryRevert options:"]
+  }
+  dom createDocument factoryRevert doc
+  _execXml [$doc asXML]
+  if {$opts(progress) != ""} {
+    set _execProgress [concat $opts(progress) factoryRevert]
+  }
+  if {$opts(async) != ""} {
+    set _execAsync $opts(async)
+    return
+  }
+  set ret [wait]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::previousRevert {args} {
+  if {[info exists _execAsync]} {
+    error "unable to execute, a test is running"
+  }
+  set optlist {
+    {async.arg    {} "return immediately, then call the given script upon completion"}
+    {progress.arg {} "script to run with progress notifications"}
+  }
+  array set opts [cmdline::getoptions args $optlist "previousRevert options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "previousRevert options:"]
+  }
+  dom createDocument softwareRevert doc
+  _execXml [$doc asXML]
+  if {$opts(progress) != ""} {
+    set _execProgress [concat $opts(progress) previousRevert]
+  }
+  if {$opts(async) != ""} {
+    set _execAsync $opts(async)
+    return
+  }
+  set ret [wait]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::reboot {args} {
+  set optlist {
+    {msg.arg {} "Message"}
+  }
+  array set opts [cmdline::getoptions args $optlist "reboot options"]  
+  set msg $opts(msg)
+  dom createDocument reboot doc
+  $doc documentElement root
+  if {$msg != ""} {
+      $root appendFromScript { domNode::text $msg }
+  }
+  _execXml [$doc asXML] {} false
+  return
+}
+
+# Reference ticket #35069 avillarreal, add-in "secure" mode parameters:  http_off, mdns_off, telnet_off
+itcl::body bps::BPSConnection::networkInfo {args} {
+  set optlist {
+  }
+  array set opts [cmdline::getoptions args $optlist "networkInfo options"]  
+  dom createDocument networkInfo doc
+  $doc documentElement root
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+  
+  set ret {}
+  
+   foreach attr {dhcp hostname ip netmask gw currip currmask currip6global curr6maskglobal currip6link curr6masklink currip4 curr4mask dns1 dns2 dns3 address1 address2 address3 address4 address5 mdns_off telnet_off http_off ts1 ts2 ts3} {
+      dict set ret $attr [$root @$attr {}]
+   }
+   return $ret
+}
+
+itcl::body bps::BPSConnection::cliVersion {args} {
+  set optlist {
+  }
+  array set opts [cmdline::getoptions args $optlist "cliVersion options"]  
+  dom createDocument cliVersion doc
+  $doc documentElement root
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+  
+  set ret {}
+  
+  foreach node [$root selectNodes param/child::node()] {
+    lappend ret [$node asText]
+  }
+  
+   return $ret
+}
+
+itcl::body bps::BPSConnection::serialNumber {args} {
+  set optlist {
+  }
+  array set opts [cmdline::getoptions args $optlist "serialNumber options"]  
+  dom createDocument serialNumber doc
+  $doc documentElement root
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+  
+  set ret {}
+  
+  foreach node [$root selectNodes param/child::node()] {
+    lappend ret [$node asText]
+  }
+  
+   return $ret
+}
+
+itcl::body bps::BPSConnection::uptime {args} {
+  set optlist {
+  }
+  array set opts [cmdline::getoptions args $optlist "uptime options"]  
+  dom createDocument uptime doc
+  $doc documentElement root
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement root
+  
+  set ret {}
+  
+  foreach node [$root selectNodes param/child::node()] {
+    lappend ret [$node asText]
+  }
+  
+   return $ret
+}
+
+# Reference ticket #35069 avillarreal, add-in "secure" mode parameters:  http_off, mdns_off, telnet_off
+itcl::body bps::BPSConnection::updateNetwork {args} {
+  set optlist {
+   {dhcp.arg {} "DHCP Server"}
+   {hostname.arg {} "Hostname"}
+   {ip.arg {} "IP Address"}
+   {netmask.arg {} "Netmask"}
+   {gw.arg {} "Gateway"}
+   {dns1.arg {} "DNS address 1"}
+   {dns2.arg {} "DNS address 2"}
+   {dns3.arg {} "DNS address 3"}
+   {ts1.arg {} "Time Server address 1"}
+   {ts2.arg {} "Time Server address 2"}
+   {ts3.arg {} "Time Server address 3"}
+   {http_off.arg {} "HTTP Off: 'true' used as an argument turns port 80 OFF, 'false' turns port 80 ON."}
+   {mdns_off.arg {} "mDNS Off: 'true' used as an argument turns port 5353 OFF, 'false' turns port 5353 ON."}
+   {telnet_off.arg {} "Telnet Off: 'true' used as an argument turns port 23 OFF, 'false' turns port 23 ON."}
+   {restart "Restart"}
+  }
+  array set opts [cmdline::getoptions args $optlist "updateNetwork options"]
+  dom createDocument updateNetworkInfo doc
+  $doc documentElement root
+
+   foreach opt {dhcp hostname ip netmask gw dns1 dns2 dns3 mdns_off telnet_off http_off restart ts1 ts2 ts3} {
+      if {$opts($opt) == ""} continue
+      $root setAttribute $opt $opts($opt)
+   }
+  _execXml [$doc asXML] false
+   return ""
+}
+
+itcl::body bps::BPSConnection::backup {args} {
+  set optlist {
+    {useExternal "Backup to USB or external hard drive"}
+    {nfsIP.arg {} "Backup to NFS partition at this IP"}
+    {nfsPath.arg {} "Backup to NFS partition on this path"}
+  }
+  array set opts [cmdline::getoptions args $optlist "backup options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "backup options:"]
+  }
+
+  dom createDocument backupInstallation doc
+  $doc documentElement root
+  foreach {opt attr} {
+    useExternal useUSB
+    nfsIP nfsIP
+    nfsPath nfsPath
+  } {
+      if {$opts($opt) == ""} continue
+      $root setAttribute $attr $opts($opt)
+  }
+  set result {}
+  _execXml [$doc asXML] {} false
+  return $result
+}
+
+itcl::body bps::BPSConnection::listBackups {args} {
+  set optlist {
+    {useExternal "Check USB or external hard drive"}
+    {nfsIP.arg {} "IP address of the NFS server"}
+    {nfsPath.arg {} "Path to NFS partition"}
+  }
+  array set opts [cmdline::getoptions args $optlist "listBackups options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "listBackups options:"]
+  }
+
+  dom createDocument listInstallations doc
+  $doc documentElement root
+  foreach {opt attr} {
+    useExternal useUSB
+    nfsIP nfsIP
+    nfsPath nfsPath
+  } {
+      if {$opts($opt) == ""} continue
+      $root setAttribute $attr $opts($opt)
+  }
+  set resp [_execXml [$doc asXML]]
+  set ret {}
+  dom parse $resp doc
+  $doc documentElement root
+  foreach node [$root selectNodes installation/child::node()] {
+    lappend ret [$node asText]
+  }
+
+  return $ret
+}
+
+itcl::body bps::BPSConnection::restoreBackup {args} {
+  set optlist {
+    {useExternal "Use USB or external hard drive"}
+    {nfsIP.arg {} "IP address of the NFS server"}
+    {nfsPath.arg {} "Path to NFS partition"}
+    {image.arg {} "Backup image name"}
+  }
+  array set opts [cmdline::getoptions args $optlist "restoreBackup options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "restoreBackup options:"]
+  }
+
+  dom createDocument revertInstallation doc
+  $doc documentElement root
+  foreach {opt attr} {
+    useExternal useUSB
+    nfsIP nfsIP
+    nfsPath nfsPath
+    image image
+  } {
+      if {$opts($opt) == ""} continue
+      $root setAttribute $attr $opts($opt)
+  }
+  _execXml [$doc asXML] {} false
+  return
+}
+
+itcl::body bps::BPSConnection::installUpdate {args} {
+  set optlist {
+    {file.arg    {} "update file"}
+    {url.arg {} "url for update file"}
+    {progress.arg {bps::textprogress stdout} "script to run with progress notifications"}
+    {async.arg    {} "return immediately, then call the given script upon completion"}
+    {slot2 "apply update to slot 2"}
+    {slot1 "apply update to slot 1"}
+    {slot0 "apply update to slot 0"}
+  }
+  array set opts [cmdline::getoptions args $optlist "installUpdate options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "installUpdate options:"]
+  }
+  if {$opts(file) != ""} {
+    set up [list -file [list uploadFormElement update $opts(file)]]
+  } elseif {$opts(url) != ""} {
+    set up [list -url [list uploadFormElement update $opts(url)]]
+  } else {
+    error "Either -file or -url must be specified"
+  }
+
+  # default to slot0 only
+  if {!$opts(slot0) && !$opts(slot1) && !$opts(slot2)} {
+    set opts(slot0) true
+  }
+
+  set _reply(install) pending
+  if {$opts(progress) != ""} {
+    set _execProgress [concat $opts(progress) update]
+  }
+  if {[catch {
+    set slots {}
+    for {set x 0} {$x < 3} {incr x} {
+        if {$opts(slot$x)} {
+            lappend slots -field [list slot$x true]
+        }
+    }
+    set ret [eval [list multipart::post http://${_host}/gwt/upload/upload \
+      [list Cookie IXSESSIONID=$_jsessionid] \
+      $opts(progress) \
+      -field [list uploadtype update] \
+      -field [list key $_jsessionid] \
+      -field [list internalfile "Import"]] \
+      $slots \
+      $up]
+  } err]} {
+    global errorCode errorInfo
+    unset _reply(install)
+    error $err $errorInfo $errorCode
+  }
+  if {$opts(async) != ""} {
+    set _execAsync $opts(async)
+    return
+  }
+  set ret [wait]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::installStrikepack {args} {
+  set optlist {
+    {file.arg    {} "update file"}
+    {url.arg {} "url for update file"}
+    {progress.arg {bps::textprogress stdout} "script to run with progress notifications"}
+    {async.arg    {} "return immediately, then call the given script upon completion"}
+    {slot2 "apply update to slot 2"}
+    {slot1 "apply update to slot 1"}
+    {slot0 "apply update to slot 0"}
+  }
+  array set opts [cmdline::getoptions args $optlist "installStrikepack options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "installStrikepack options:"]
+  }
+  if {$opts(file) != ""} {
+    set up [list -file [list uploadFormElement update $opts(file)]]
+  } elseif {$opts(url) != ""} {
+    set up [list -url [list uploadFormElement update $opts(url)]]
+  } else {
+    error "Either -file or -url must be specified"
+  }
+
+  # default to slot0 only
+  if {!$opts(slot0) && !$opts(slot1) && !$opts(slot2)} {
+    set opts(slot0) true
+  }
+
+  set _reply(install) pending
+  if {$opts(progress) != ""} {
+    set _execProgress [concat $opts(progress) update]
+  }
+  if {[catch {
+    set slots {}
+    for {set x 0} {$x < 3} {incr x} {
+        if {$opts(slot$x)} {
+            lappend slots -field [list slot$x true]
+        }
+    }
+    eval [list multipart::post http://${_host}/gwt/upload/upload \
+      [list Cookie IXSESSIONID=$_jsessionid] \
+      $opts(progress) \
+      -field [list uploadtype strikepack] \
+      -field [list key $_jsessionid]] \
+      $slots \
+      $up
+  } err]} {
+    global errorCode errorInfo
+    unset _reply(install)
+    error $err $errorInfo $errorCode
+  }
+  if {$opts(async) != ""} {
+    set _execAsync $opts(async)
+    return
+  }
+  set ret [wait]
+  return $ret
+}
+
+itcl::body bps::BPSConnection::exportReport {args} {
+  set optlist {
+    {testid.arg \0 "test result ID"}
+    {iterations.arg {} "comparison iterations (or result ID's in same form as testid)"}
+    {context.arg default "test context"}
+    {file.arg    {} "output file"}
+    {channel.arg {} "output channel"}
+    {format.arg pdf "report format {zip, html, pdf, rtf, xls, bpt, csv, xml, flowstats}"}
+    {sectionids.arg {} "section ids"}
+  }
+  array set opts [cmdline::getoptions args $optlist "exportReport options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "exportReport options:"]
+  }
+  if {![info exists _contexts($opts(context))]} {
+    error "unknown context $opts(context)"
+  }
+  if {[lsearch {zip html pdf rtf xls bpt csv xml flowstats} $opts(format)] == -1} { 
+    error "Invalid report format \"$opts(format)\"" 
+  } 
+ 
+  if {$opts(testid) == "\0"} {
+      # export from the current test
+      return [$_contexts($opts(context)) exportReport -file $opts(file) \
+                                          -channel $opts(channel) \
+                                          -format $opts(format) -iterations $opts(iterations) -sectionids $opts(sectionids)]
+  }
+  if {$opts(channel) != ""} { 
+    set needclose false 
+    set chan $opts(channel) 
+  } elseif {$opts(file) != ""} { 
+    set needclose true 
+    set chan [open $opts(file) w] 
+  } else { 
+    error "Either -file or -channel must be specified" 
+  } 
+  try { 
+    array set docType { 
+      pdf 0 
+      rtf 1 
+      zip 2 
+      xls 3 
+      html 4 
+      bpt 5
+      csv 6
+      xml 10
+      flowstats 11
+    } 
+    foreach {type id host name iter} [split $opts(testid) @] break
+    switch -exact $type {
+    	test {
+    		set tt TEST
+    	}
+    	testSeries {
+    		set tt PLAN
+    	}
+    	multiBoxTest {
+    		set tt MULTIBOX
+    	}
+    	default {
+    		error "Invalid test id \"$opts(testid)\""
+    	}
+    }
+    foreach compare $opts(iterations) {
+    	foreach {ctype cid} [split $compare @] break
+    	if {$ctype == $type} {
+            lappend id $cid
+    	} else {
+            lappend id "i$ctype"
+    	}
+    }
+    set query [http::formatQuery testType $tt \
+                      sectionId [join $opts(sectionids) ","] \
+                      internalid [join $id ","] \
+                      name $name \
+                      iteration $iter \
+                      locale $_locale \
+                      docType $docType($opts(format))] 
+    set tok [http::geturl http://$_host/gwt/ReportExportRaw \
+                -protocol 1.0 \
+                -headers [list Cookie IXSESSIONID=$_jsessionid] \
+                -query $query \
+                -channel $chan] 
+    try { 
+      if {$opts(format) == "flowstats"
+          && [http::ncode $tok] == "500"} {
+        error "No flow stats found"
+      }
+      if {[http::status $tok] != "ok" 
+          || [http::ncode $tok] != 200} { 
+        error "Error downloading report: [http::code $tok] [http::data $tok]" 
+      } 
+    } finally { 
+      http::cleanup $tok 
+    } 
+  } finally { 
+    if {$needclose} { 
+      close $chan 
+    } 
+  }
+}
+
+itcl::body bps::BPSConnection::exportFlowStats {args} {
+    set optlist {
+        {testid.arg \0 "test result ID"}
+        {destdir.arg {} "destination directory where files will be placed"}
+        {password.arg {} "password for BPS device (ignored, for backwards compatibility only)"}
+    }
+    array set opts [cmdline::getoptions args $optlist "exportFlowStats options"]
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "exportFlowStats options:"]
+    }
+    if {$opts(testid) == "\0"} {
+        error "-testid must be specified"
+    }
+    if {$opts(destdir) == ""} {
+        error "-destdir must be specified"
+    }
+
+    set tid [lindex [split $opts(testid) "@"] 1]
+
+    set zipfile [file join $opts(destdir) $tid.zip]
+    file mkdir $opts(destdir)
+    if {[catch {
+        exportReport -testid $opts(testid) \
+                     -file $zipfile \
+                     -format flowstats
+    } err]} {
+        global errorInfo errorCode
+        if {$err == {No flow stats found}} {
+            return {}
+        } else {
+            error $err $errorInfo $errorCode
+        }
+    }
+    package require vfs::zip
+    set files {}
+    set mnt_file [vfs::zip::Mount $zipfile /$tid]
+    try {
+        foreach dir [glob -nocomplain /$tid/*/*] {
+            foreach file [glob -nocomplain $dir/*.csv] {
+                file copy -force $file $opts(destdir)
+                lappend files [file tail $file]
+            }
+        }
+    } finally {
+        vfs::zip::Unmount $mnt_file /$tid
+    }
+    file delete $zipfile
+    return $files
+}
+
+itcl::body bps::BPSConnection::exportTest {args} {
+  set optlist {
+    {testid.arg \0 "test result ID"}
+    {file.arg    {} "output file"}
+  }
+
+  array set opts [cmdline::getoptions args $optlist "exportTest options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "exportTest options:"]
+  }
+  if {$opts(testid) == "\0"} {
+    error "-testid must be specified"
+  }
+  if {$opts(file) == ""} {
+    error "File must be specified"
+  }
+
+  if {[catch {
+        exportReport -testid $opts(testid) \
+                     -file $opts(file) \
+                     -format bpt
+    } err]} {
+        return -code 1 $err
+    }
+    return -code 0
+}
+
+itcl::body bps::BPSConnection::getChassis {args} {
+  return [uplevel [list bps::ChassisClient [namespace current]${this}::#auto [namespace which $this] \
+                   $_userid localhost {} {}] $args]
+}
+
+itcl::body bps::BPSConnection::listUsers {} {
+  set ret [_execXml "<userInfo/>"]
+  dom parse $ret doc
+  $doc documentElement root
+  set ret {}
+  foreach user [$root selectNodes user] {
+    dict set ret [$user @id] {}
+    foreach attr {name email group} {
+      dict set ret [$user @id] $attr [$user @$attr ""]
+    }
+  }
+  return $ret
+}
+
+itcl::body bps::BPSConnection::userInfo {id} {
+  dom createDocument userInfo doc
+  $doc documentElement root
+  $root setAttribute id $id
+  set ret [_execXml [$doc asXML]]
+  dom parse $ret doc
+  $doc documentElement user  
+    set ret {}
+    foreach attr {id name email group locale} {
+      dict set ret $attr [$user @$attr {}]
+    }
+  return $ret
+}
+
+itcl::body bps::BPSConnection::addUser {id password name email {group user}} {
+  dom createDocument addUser doc
+  $doc documentElement root
+  $root setAttribute id $id
+  $root setAttribute password $password
+  $root setAttribute name $name
+  $root setAttribute email $email
+  $root setAttribute group $group
+  _execXml [$doc asXML]
+  return
+}
+
+itcl::body bps::BPSConnection::removeUser {id} {
+  dom createDocument removeUser doc
+  $doc documentElement root
+  $root setAttribute id $id
+  _execXml [$doc asXML]
+  return
+}
+
+itcl::body bps::BPSConnection::updateUser {id args} {
+  set optlist {
+    {email.arg \0 "email address"}
+    {name.arg  \0 "real name"}
+    {password.arg \0 "password"}
+    {group.arg \0 "user group"}
+  }
+  array set opts [cmdline::getoptions args $optlist "updateUser options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "updateUser options:"]
+  }
+  dom createDocument updateUserInfo doc
+  $doc documentElement root
+  $root setAttribute id $id
+  foreach opt {email name password group} {
+    if {$opts($opt) != "\0"} {
+      $root setAttribute $opt $opts($opt)
+    }
+  }
+  _execXml [$doc asXML]
+  return
+}
+
+itcl::body bps::BPSConnection::updateProfile {args} {
+  set optlist {
+    {email.arg \0 "email address"}
+    {name.arg  \0 "real name"}
+    {password.arg \0 "password"}
+    {oldpassword.arg \0 "previous password (required if setting password)"}
+  }
+  array set opts [cmdline::getoptions args $optlist "updateProfile options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "updateProfile options:"]
+  }
+  if {$opts(password) != "\0" && $opts(oldpassword) == "\0"} {
+    error "If -password is specified, then -oldpassword must also be specified"
+  }
+  dom createDocument updatePersonalInfo doc
+  $doc documentElement root
+  foreach opt {email name password oldpassword} {
+    if {$opts($opt) != "\0"} {
+      $root setAttribute $opt $opts($opt)
+    }
+  }
+  _execXml [$doc asXML]
+  return
+}
+
+itcl::body bps::BPSConnection::setL2DataRate {{igoreipg true}} {
+# ---------------------------------------------------------------------------- #
+#   dom createDocument setUserPref doc
+#   $doc documentElement root
+#   $root setAttribute name "ignore.ipg"
+
+# NOTE: node value can't be change or can't be either than "" for ELEMENT_NODE.
+#       Can be change for TEXT_NODE. But didn't find any way to change the node
+#       type or create a TEXT_NODE.
+#       https://groups.google.com/forum/#!topic/comp.lang.tcl/RT-tY1UlN3s
+
+#   $root nodeValue $igoreipg
+# ---------------------------------------------------------------------------- #
+
+    if {$igoreipg != true &&
+        $igoreipg != false} {
+        error "ignoreipg can be true/false only."
+    }
+
+    set request "<setUserPref name=\"ignore.ipg\">$igoreipg</setUserPref>"
+
+    if { [catch {_execXml $request "#setUserPref" } ret] } {
+        error $ret
+    }
+}
+
+itcl::body bps::BPSConnection::_reserveToken {} {
+  return [incr _tokenIdx]
+}
+
+itcl::body bps::BPSConnection::_exec {cmd} {
+  _execXml [_commandToXml $cmd]
+}
+
+itcl::body bps::BPSConnection::_execXml {xml {token {}} {usetimeout true}} {
+  if {$token != ""} {
+  		set thistok $token
+  } else {
+      set thistok [_reserveToken]
+  }
+  dom parse $xml dom
+  $dom documentElement doc
+  $doc setAttribute token $thistok
+  set xml [$doc asXML]
+  unset dom
+
+#puts stderr "sending $xml"
+  set _reply($thistok) pending
+  $_channel send $xml
+#NOTE: timeout feature removed
+#  if {$usetimeout && $timeout > 0} {
+#      set _after($thistok) [after [expr $timeout * 1000] \
+#           [namespace code [list $this _timeout $thistok]]]
+#	}
+
+#puts stderr "doing vwait"
+  vwait [itcl::scope _reply($thistok)]
+  foreach {status val} $_reply($thistok) break
+  if {[info exists _after($thistok)]} {
+    after cancel $_after($thistok)
+    unset _after($thistok)
+  }
+  unset _reply($thistok)
+  switch $status {
+    ok {
+      return $val
+    }
+    error {
+      dom parse $val dom
+      $dom documentElement doc
+      set errcode [$doc @id ERROR]
+      foreach arg [$doc selectNodes subst/child::node()] {
+	    lappend errcode [$arg asText]
+      }
+      set err [$doc selectNodes detail/child::node()]
+      if {$err != ""} {
+          set err [$err asText]
+      } else {
+          set err Error
+      }
+      if {[$doc hasAttribute paramPath]} {
+        set err "[$doc @paramPath]: $err"
+      }
+      error $err {} $errcode
+    }
+    default {
+      error "unexpected response from server: $val"
+    }
+  }
+}
+
+itcl::body bps::BPSConnection::_channeldata {data} {
+ if {[catch {
+   dom parse $data dom
+ } err]} {
+   puts stderr "invalid XML received from device: $err"
+   return
+ }
+ $dom documentElement doc
+ set type [$doc @type]
+ set status [$doc @status]
+ set tok [$doc @token]
+ set data [$doc selectNodes child::node()]
+ switch $type {
+   reply {
+     # is anybody listening?
+     if {[info exists _reply($tok)]} {
+       if {$data == ""} {
+	 set _reply($tok) [list $status {}]
+       } else {
+	 set _reply($tok) [list $status [$data asXML]]
+       }
+     }
+     if {[info exists _after($tok)]} {
+       after cancel $_after($tok)
+       unset _after($tok)
+     }
+   }
+   notify {
+     switch $tok {
+       systemError {
+         bps::ChassisClient::_systemError $tok [namespace which $this] $data
+       }
+       testStart -
+       testComplete {
+         bps::TestClient::_testEvent $tok [namespace which $this] $data
+         bps::LabClient::_testEvent $tok [namespace which $this] $data
+         bps::ChassisClient::_testEvent $tok [namespace which $this] $data
+       }
+       testPlanStart -
+       testPlanComplete {
+         bps::TestSeriesClient::_testEvent $tok [namespace which $this] $data
+         bps::ResiliencyBase::_testEvent $tok [namespace which $this] $data
+         bps::ChassisClient::_testEvent $tok [namespace which $this] $data
+       }
+       multiBoxTestStart -
+       multiBoxTestComplete {
+         bps::MultiBoxClient::_testEvent $tok [namespace which $this] $data
+         bps::ChassisClient::_testEvent $tok [namespace which $this] $data
+       }
+       captureStart {
+       }
+       captureStop {
+       }
+       attackplanImport {
+         if {[info exists _reply($tok)]} {
+           if {$data == ""} {
+	             set _reply($tok) [list $status {}]
+           } else {
+	             set _reply($tok) [list $status [$data asXML]]
+           }
+         }
+       }
+       captureImport {
+         if {[info exists _reply($tok)]} {
+           if {$data == ""} {
+	             set _reply($tok) [list $status {}]
+           } else {
+	             set _reply($tok) [list $status [$data asXML]]
+           }
+         }
+       }
+       softwareRevert -
+       factoryRevert {
+	 if {[info exists _execProgress]} {
+           if {[$data hasAttribute percent]} {
+             _trycallback $_execProgress [$data @percent]
+           }
+           
+           if {[$data hasAttribute result]} {
+             unset _execProgress
+           }
+         }
+         if {[info exists _execAsync]} {
+           if {[$data hasAttribute result]} {
+             _trycallback $_execAsync
+             unset _execAsync
+           }
+         }
+         if {[$data hasAttribute result]} {
+           set _reply(install) ""
+         }
+       }
+       softwareUpdate -
+       strikepackUpdate {
+	 if {[info exists _execProgress]} {
+           if {[$data hasAttribute percent]} {
+             _trycallback $_execProgress [$data @percent]
+           }
+           
+           if {[$data hasAttribute result] || $status == "error"} {
+             unset _execProgress
+           }
+         }
+         if {[info exists _execAsync]} {
+           if {[$data hasAttribute result] || $status == "error"} {
+             _trycallback $_execAsync
+             unset _execAsync
+           }
+         }
+         if {[$data hasAttribute result]} {
+           set _reply(install) ""
+           if {[$data @result] == "failed"} {
+               set errcode ERROR
+               set detail [$data selectNode child::node()]
+               if {$detail != ""} {
+                   set detail [$detail asText]
+               }
+               set _reply(install) "error: $detail"
+           }
+         }
+         if {$status == "error"} {
+         	 set errcode [$data @id ERROR]
+         	 set detail [$data selectNode detail/child::node()]
+         	 if {$detail != ""} {
+         	 	 set detail [$detail asText]
+         	 }
+             set _reply(install) "error: $detail"
+         }
+       }
+       upgradeFailed {
+         puts stderr "\nUpgrade failed\n"
+	       set _reply(install) ""
+         if {[info exists _execAsync]} {
+           _trycallback $_execAsync
+           unset _execAsync
+         }
+       }
+       chassisState {
+         bps::ChassisClient::_stateChange chassisState [namespace which $this] $data
+         bps::TestSeriesClient::_testEvent $tok [namespace which $this] $data
+         bps::ResiliencyBase::_testEvent $tok [namespace which $this] $data
+         bps::MultiBoxClient::_testEvent $tok [namespace which $this] $data
+         bps::ChassisClient::_ptraceEvent $tok [namespace which $this] $data
+         bps::TestClient::_testEvent $tok [namespace which $this] $data
+         bps::LabClient::_testEvent $tok [namespace which $this] $data
+       }
+       connectionClosed {
+         bps::ChassisClient::_stateChange connectionClosed [namespace which $this] $data
+       }
+       \#toomanyconn {
+       		 set _connecting 2
+       }
+       \#flowexception {
+     	 		 bps::TestClient::_testEvent $tok [namespace which $this] $data
+     	 		 bps::LabClient::_testEvent $tok [namespace which $this] $data
+     	 		 bps::TestSeriesClient::_testEvent $tok [namespace which $this] $data
+     	 		 bps::ResiliencyBase::_testEvent $tok [namespace which $this] $data
+     	 		 bps::MultiBoxClient::_testEvent $tok [namespace which $this] $data
+       }
+     	 resiliencyStat {
+     	 		 bps::ResiliencyBase::_testEvent $tok [namespace which $this] $data
+     	 }
+       default {
+       		 switch -exact [$data nodeName] {
+       		 		 ptraceurls -
+       		 		 error {
+                 bps::ChassisClient::_ptraceEvent $tok [namespace which $this] $data
+       		 		 }
+       		 }
+       }
+     }
+   }
+   update {
+     switch $tok {
+     	 #rtstats {
+     	 		 bps::TestClient::_testEvent $tok [namespace which $this] $data
+     	 		 bps::LabClient::_testEvent $tok [namespace which $this] $data
+     	 		 bps::ResiliencyBase::_testEvent $tok [namespace which $this] $data
+     	 		 bps::TestSeriesClient::_testEvent $tok [namespace which $this] $data
+     	 		 bps::MultiBoxClient::_testEvent $tok [namespace which $this] $data
+     	 }
+       default {}
+     }
+   }
+   default {
+     # ignore
+   }
+ }
+}
+
+itcl::body bps::BPSConnection::_channelclosed {} {
+     if {[info exists _ping]} {
+       after cancel $_ping
+       unset _ping
+     }
+		# abort any pending commands, since they will never complete
+		foreach {token acmd} [array get _after] {
+        after cancel $acmd
+  		  unset _after($token)
+        set _reply($token) [list error \
+          "<error id='DISCONNECT'>
+           <detail>command aborted due to disconnect from device, token=$token</detail>
+           </error>"]
+		}
+  _trycallback $onclose
+}
+
+itcl::body bps::BPSConnection::_trycallback {cb args} {
+  if {"" == $cb} return
+  if {[catch {uplevel #0 $cb $args} err]} {
+    global errorInfo
+    puts stderr $errorInfo
+  }
+}
+
+itcl::body bps::BPSConnection::_commandToXml {commandstr} {
+  set cmd [lindex $commandstr 0]
+  if {![regexp {^\w+$} $cmd]} {
+    error "invalid command format \"$commandstr\"" {} RUNTIME_ERROR
+  }
+  dom createDocument $cmd doc
+  $doc documentElement root
+  set count 1
+  foreach {key value} [lrange $commandstr 1 end] {
+    if {"--" == $key} {
+      incr count
+      break
+    }
+    if {![string match -* $key]} break
+    incr count 2
+    $root setAttribute [string range $key 1 end] $value
+  }
+  $root appendFromScript {
+    foreach arg [lrange $commandstr $count end] {
+      domNode::param {
+        domNode::text $arg
+      }
+    }
+  }
+  return [$doc asXML]
+}
+
+itcl::body bps::BPSConnection::_discoverComponents {} {
+  set xml [_exec presetNames]
+  dom parse $xml dom
+  $dom documentElement doc
+  foreach comp [$doc selectNodes child::*] {
+    set compname [$comp @id]
+    set compalias $compname
+    dict set _component $compalias {}
+    dict set _component $compalias type [$comp @type]
+    dict set _component $compalias realname $compname
+    dict set _component $compalias label [$comp selectNodes */label/*/child::node()]
+    dict set _component $compalias description [$comp selectNodes */description/*/child::node()]
+  }
+}
+
+itcl::body bps::BPSConnection::_text {tdom select} {
+  set nodes [$tdom selectNodes $select]
+  if {$nodes == ""} return ""
+  set ret ""
+  foreach node $nodes {
+    append ret [$node asXML]
+  }
+  return $ret
+}
+
+itcl::body bps::BPSConnection::_networkDoc {} {
+    if {![info exists _networkDoc]} {
+        set xml [_exec getNetworkModel]
+        dom parse $xml _networkDom
+        $_networkDom documentElement _networkDoc
+    }
+    return $_networkDoc
+}
+
+itcl::body bps::BPSConnection::_testDoc {} {
+    if {![info exists _testDoc]} {
+        set xml [_exec getTestModelDescription]
+        dom parse $xml _testDom
+        $_testDom documentElement _testDoc
+    }
+    return $_testDoc
+}
+
+itcl::body bps::BPSConnection::_testParams {} {
+    if {![info exists _testParamStruct]} {
+        set node [[_testDoc] selectNodes "sharedComponentSettings"]
+        if {$node == ""} {
+            return ""
+        }
+        set parameters [model::processTypeDeclarationList \
+		              [namespace current]::testModel [$node selectNodes parameters]]
+        set constraints {}
+        set ps [model::defineStruct [namespace current]::testModel testModelParams \
+                 $parameters $constraints]
+        set _testParamStruct $ps
+    }
+    return $_testParamStruct
+}
+
+itcl::body bps::BPSConnection::_networkParams {type} {
+    if {![info exists _networkParamStruct($type)]} {
+        set node [[_networkDoc] selectNodes "element\[@name='$type'\]"]
+        if {$node == ""} {
+            return ""
+        }
+        set parameters [model::processTypeDeclarationList \
+		              [namespace current]::$type [$node selectNodes parameters]]
+        set constraints {}
+        set ps [model::defineStruct [namespace current]::$type ${type}Params \
+                 $parameters $constraints]
+        set _networkParamStruct($type) $ps
+    }
+    return $_networkParamStruct($type)
+}
+
+itcl::body bps::BPSConnection::_componentDoc {type} {
+    if {![info exists _componentDoc($type)]} {
+        set xml [_exec [list cannedComponentInfo -name $type -includeOutputs true]]
+        dom parse $xml _componentDom($type)
+        $_componentDom($type) documentElement _componentDoc($type)
+    }
+    return $_componentDoc($type)
+}
+
+itcl::body bps::BPSConnection::_componentParams {namespace compname} {
+  set type [dict get $_component $compname type]
+  set doc [_componentDoc $type]
+  set parameters [model::processTypeDeclarationList \
+		  $namespace [$doc selectNodes parameters]]
+  set constraints {}
+  set ps [model::defineStruct ${namespace}::$type ${type}Params \
+             $parameters $constraints]
+  dict set _component $compname params $ps
+  return $ps
+}
+
+itcl::body bps::BPSConnection::_componentGroups {type} {
+  set doc [_componentDoc $type]
+  set grouplist {}
+  foreach group [$doc selectNodes {outputs/*}] {
+    set groupid [$group @group default]
+    if {[lsearch $grouplist $groupid] == -1} {
+      lappend grouplist $groupid
+    }
+  }
+  return $grouplist
+}
+
+itcl::body bps::BPSConnection::_timeout {token} {
+#puts stderr "timeout $token"
+  if {[info exists _after($token)]} {
+  		unset _after($token)
+  }
+  set _reply($token) [list error \
+"<error id='TIMEOUT'>
+ <detail>timeout waiting for response from device, token=$token</detail>
+</error>"]
+}
+
+itcl::body bps::BPSConnection::_fixmodel {xmlnode} {
+  if {[$xmlnode hasAttribute canSave]} {
+    $xmlnode removeAttribute canSave
+  }
+  if {[$xmlnode hasAttribute namechanged]} {
+    $xmlnode removeAttribute namechanged
+  }
+  if {[$xmlnode hasAttribute saved]} {
+    $xmlnode removeAttribute saved
+  }
+  $xmlnode setAttribute schemaver $_schemaver
+  $xmlnode setAttribute author $_userid
+  $xmlnode setAttribute class custom
+}
+
+itcl::body bps::BPSConnection::_strikeDict {xmlnode} {
+  set ret {}
+  dict set ret name [$xmlnode @name]
+  if {[$xmlnode hasAttribute protocol]} {
+    dict set ret protocol [$xmlnode @protocol]
+  }
+  if {[$xmlnode hasAttribute direction]} {
+    dict set ret direction [$xmlnode @direction]
+  }
+  set catnode [$xmlnode selectNodes category/child::node()]
+  if {$catnode != ""} {
+      dict set ret category [$catnode asXML]
+  }
+  set descnode [$xmlnode selectNodes desc/child::*/child::node()]
+  if {$descnode != ""} {
+    dict set ret description [$descnode asXML]
+  }
+
+  set keywords {}
+  foreach kw [$xmlnode selectNodes keyword] {
+    lappend keywords [$kw @name]
+  }
+  dict set ret keywords $keywords
+
+  set references {}
+  foreach ref [$xmlnode selectNodes reference] {
+    lappend references [list \
+       type [$ref @type] \
+       value [$ref @value] ]
+  }
+  dict set ret references $references
+  return $ret
+}
+
+itcl::body bps::BPSConnection::_strikeSetDict {xmlnode} {
+  set ret {}
+  set namenode [$xmlnode selectNodes name/child::*/child::node()]
+  if {$namenode != ""} {
+    dict set ret name [$namenode asXML]
+  }
+  set descnode [$xmlnode selectNodes desc/child::*/child::node()]
+  if {$descnode != ""} {
+    dict set ret description [$descnode asXML]
+  }
+  return $ret
+}
+
+proc bps::BPSConnection::_appendTestResultId {string} {
+  foreach {type id host name iter} [split $string @] break
+  switch -exact $type {
+  	  test {
+  	  	  set node testmodelid
+    	  set idattr runid
+  	  }
+  	  testSeries {
+  	  	  set node testplanid
+    	  set idattr planid
+  	  }
+  	  multiBoxTest {
+  	  	  set node multiboxid
+          set idattr multiid
+  	  }
+  	  default {
+  	  	  error "Invalid test result ID \"$string\""
+  	  }
+  }
+  domNode::$node -$idattr $id -host $host -name $name -iteration $iter
+}
+
+proc bps::BPSConnection::_appendIteration {iteration} {
+  domNode::iteration  { domNode::text $iteration }
+}
+
+
+proc bps::BPSConnection::_getTestResultId {xmlnode} {
+    switch [$xmlnode nodeName] {
+    	testmodelid {
+    		set type test
+    		set id [$xmlnode @runid]
+    	}
+    	testplanid {
+    		set type testSeries
+    		set id [$xmlnode @planid]
+    	}
+    	multiboxid {
+    		set type multiBoxTest
+    		set id [$xmlnode @multiid]
+    	}
+    	parentMulti {
+    		set type multiBoxTest
+    		set id [$xmlnode @multiid]
+    	}
+    	default {
+    		set type unknown
+    		set id [$xmlnode @runid ""]
+    	}
+    }
+    return [list \
+      $type@$id@[$xmlnode @host ""]@[$xmlnode @name ""]@[$xmlnode @iteration ""] \
+      $type $id [$xmlnode @name ""]]
+}
+
+package provide bps::BPSConnection 0.1

@@ -1,0 +1,130 @@
+package require Itcl
+package require log
+package require ifexists
+
+namespace eval flash {
+  namespace export flashchannel
+}; # end of namespace installer
+
+#
+# FlashChannel --
+#
+# a handler for sockets that communicate with flash, that handles
+# reading/sending in the appropriate format.
+#
+# this class assumes the channel is already connected by some means, and picks
+# up from there
+#
+itcl::class flash::FlashChannel {
+  public variable inchan     stdin   ;# channel input will come in on
+  public variable outchan    stdout  ;# channel output will go out on
+  public variable onclose    {}      ;# command to run when the input is closed
+  public variable ondata     {}      ;# command to run when data is received
+
+  protected variable _oldinchan  {}  ;# channel that has the read fileevent
+  protected variable _partialdata {} ;# partial line read off of channel
+  protected variable _unhandled {}   ;# list of message that need callbacks run
+                                      # necessary to allow reentrancy on
+                                      # _incoming, in case callbacks call vwait
+
+  constructor {args} {}
+  destructor {}
+
+  public method send {string}
+  public method close {}
+
+  protected method _incoming {}
+  protected method _trycallback {cb args}
+}
+
+proc flash::flashchannel {args} {
+  uplevel flash::FlashChannel $args
+}
+
+itcl::body flash::FlashChannel::constructor {args} {
+  eval configure $args
+  return
+}
+
+itcl::configbody flash::FlashChannel::inchan {
+  if {[string compare $inchan $_oldinchan] == 0} {
+    return
+  }
+  # the uplevel here should be unnecessary, but there's a bug in tcl (as of 8.4)
+  # that fileevent doesn't work right if called from within a "trace variable"
+  # callback under some circumstance I haven't been able to characterize yet.
+  # uplevel #0 works around this by setting up a normal stack.
+  if {[catch {uplevel #0 fileevent $inchan readable [list [ifexists [list $this _incoming]]]} err]} {
+    error $err
+  }
+  if {"" != $_oldinchan} {
+    fileevent $_oldinchan readable ""
+  }
+  set _oldinchan $inchan
+  fconfigure $inchan -blocking no -buffering none -encoding utf-8 \
+     -translation binary
+  set _partialdata {} ;# reset partial data
+}
+
+itcl::configbody flash::FlashChannel::outchan {
+  if {[catch {fileevent $outchan writable} err]} {
+    error $err
+  }
+  fconfigure $outchan -buffering none -encoding utf-8
+}
+
+#
+# command called by the channel subsystem when new data is available on the
+# flash socket
+#
+itcl::body flash::FlashChannel::_incoming {} {
+  if {[eof $inchan]} {
+    close
+    return
+  }
+  if {[catch {
+    set data [encoding convertto utf-8 [read $inchan]]
+  } err]} {
+    # socket must be half-closed
+    return
+  }
+  append _partialdata $data
+  set data [split $_partialdata \0]
+  set _partialdata [lindex $data end]
+  set _unhandled [concat $_unhandled [lrange $data 0 end-1]]
+
+  # this code forces data to be handled in order, even if this method
+  # has been called recursively to do a read while blocking on vwait 
+  # in one of the callbacks
+  while {[llength $_unhandled] > 0} {
+    set piece [lindex $_unhandled 0]
+    set _unhandled [lrange $_unhandled 1 end]
+    _trycallback $ondata $piece
+  }
+  return
+}
+
+#
+# call one of our callbacks, if it's configured, and catch the error so other
+# code doesn't have to worry about it
+itcl::body flash::FlashChannel::_trycallback {cb args} {
+  if {"" == $cb} return
+  if {[catch {uplevel #0 $cb $args} err]} {
+    global errorInfo
+    log::log error "$errorInfo"
+  }
+}
+
+itcl::body flash::FlashChannel::send {string} {
+  puts -nonewline $outchan [string map {\0 {}} $string]\0
+}
+
+itcl::body flash::FlashChannel::close {} {
+  if {"" != $_partialdata} {
+    $this _trycallback $ondata $_partialdata
+  }
+  catch {fileevent $inchan readable {}}
+  $this _trycallback $onclose
+}
+
+package provide flash::flashchannel 0.1

@@ -1,0 +1,259 @@
+itcl::class bps::LawfulInterceptClient {
+  inherit bps::LabClient
+  lappend bps::LabClient::_subclasses ::bps::LawfulInterceptClient
+
+  constructor {bpsobj template args} {
+    LabClient::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _counter 0
+
+  public method save {args}
+  public method listSuperflows {args}
+  public method getTargetParameters {targetindex}
+
+  protected method _getTriggerParamObj {fieldType}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+}
+
+# <lawfulIntercept 
+#       sessionsPerSecond="1000" 
+#       concurrentSessions="10000"
+#       appProfile="BreakingPoint Enterprise" 
+#       duration="00:00:30" >
+# </lawfulIntercept>
+
+itcl::body bps::LawfulInterceptClient::constructor {
+	  bpsobj template args} {
+  _setWorkingModel {Lawful Intercept Test} \
+                   {Lawful Intercept Template} \
+                   $template
+  set control [$_xmlroot selectNodes //lawfulIntercept]
+  array set _default {}
+  foreach attr {
+    sessionsPerSecond
+    dataRate
+    concurrentSessions
+    appProfile
+    duration
+  } {
+  	set _default($attr) [$control @$attr ""]
+  }
+  set attrlist {
+  		active 
+  		superflowName
+  		ipTrigger 
+  		fieldType
+  		intervalType 
+  		timeInterval
+  		quantityInterval
+  }
+  for {set tnum 1} {$tnum <= 3} {incr tnum} {
+    set node [$control selectNodes target\[$tnum\]]
+    if {$node != ""} {
+        foreach attr $attrlist {
+  		    set _default(target$tnum.$attr) [$node @$attr ""]
+  	    }
+  	} else {
+  	    foreach attr $attrlist {
+  	        set _default(target$tnum.$attr) ""
+  	    }
+  	}
+  }
+  foreach attr {dut neighborhood name} {
+    set _default($attr) [$_xmlroot @$attr ""]
+  }
+
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::LawfulInterceptClient::destructor {} {
+}
+
+itcl::body bps::LawfulInterceptClient::save {args} {
+  eval [list _saveNamed {Lawful Intercept Template} -name [$_xmlroot @name]] $args
+}
+
+itcl::body bps::LawfulInterceptClient::listSuperflows {args} {
+  eval [list $_bpsobj listSuperflows] $args "needle:true"
+}
+
+itcl::body bps::LawfulInterceptClient::getTargetParameters {targetindex} {
+    if {$targetindex < 1 || $targetindex > 3} {
+        error "Invalid target index $targetindex"
+    }
+    set fieldType phone
+    set targetnode [$_xmlroot selectNodes "//lawfulIntercept/target\[$targetindex\]"]
+    if {$targetnode != ""} {
+        set fieldType [$targetnode @fieldType "phone"]
+    }
+    dom parse [$_bpsobj _exec triggerTypes] doc
+    $doc documentElement root
+    set fieldnode [$root selectNodes "entry\[@fieldType='$fieldType'\]/settings"]
+    return [_describeStruct $fieldnode target$targetindex]
+}
+
+itcl::body bps::LawfulInterceptClient::_getTriggerParamObj {fieldType} {
+    dom parse [$_bpsobj _exec triggerTypes] doc
+    $doc documentElement root
+    set namespace [namespace current]::t[incr _counter]
+    set memberlist [model::processTypeDeclarationList $namespace \
+                       [$root selectNodes "entry\[@fieldType='$fieldType'\]/settings"] ]
+    set constraintlist {}
+    return [model::defineStruct $namespace params \
+                                           $memberlist \
+                                           $constraintlist]
+}
+
+itcl::body bps::LawfulInterceptClient::_cget {option} {
+  if {[string match *.* $option]} {
+      set attr [lassign [split $option .] struct]
+      if {[lsearch {target1 target2 target3} $struct] == -1} {
+          error "Unknown option $option"
+      }
+      set count [string range $struct 6 end]
+  	  set node [$_xmlroot selectNodes //lawfulIntercept/target\[$count\]]
+      switch -exact -- $attr {
+  		active -
+  		superflowName -
+  		ipTrigger -
+  		fieldType -
+  		intervalType -
+  		timeInterval -
+  		quantityInterval {
+  		    if {$node == ""} {
+  		        return ""
+  		    }
+  		    return [$node @$attr ""]
+        }
+        default {
+            array set possible [getTargetParameters $count]
+            if {![info exists possible(-$option)]} {
+                error "Unknown option $option"
+            }
+            if {$node != ""} {
+                array set vals [model::ComponentProxy::flatComponentParams $node target$count]
+                if {[info exists vals($option)]} {
+                    return $vals($option)
+                }
+            }
+            return $possible(-$option)
+        }
+      }
+  }
+  switch -exact -- $option {
+    dut {return [$_xmlroot @dut]}
+    neighborhood {return [$_xmlroot @network]}
+    name {return [$_xmlroot @name]}
+    sessionsPerSecond -
+    dataRate -
+    concurrentSessions -
+    appProfile -
+    duration {
+      set control [$_xmlroot selectNodes //lawfulIntercept]
+  	  return [$control @$option ""]
+    }
+    default {
+      error "Unknown option $option"
+    }
+  }
+}
+
+itcl::body bps::LawfulInterceptClient::_doConfigChange {args} {
+  set opts {dut neighborhood name}
+  set oldcontrol [$_xmlroot selectNodes lawfulIntercept]
+  dom parse [$oldcontrol asXML] cdoc
+  $cdoc documentElement croot
+
+  foreach target [$croot selectNodes target] {
+      foreach dataarg [$target selectNodes param] {
+          $target removeChild $dataarg
+      }
+  }
+
+  _createCommand doc root workingModelModify
+  foreach {option value} $args {
+    if {![string match -* $option]} {
+      error "Invalid option $option"
+    }
+    set option [string range $option 1 end]
+    if {[lsearch $opts $option] != -1} {
+      $root setAttribute $option $value
+    } elseif {[lsearch {
+        sessionsPerSecond
+        dataRate
+        concurrentSessions
+        appProfile
+        duration
+    } $option] != -1} {
+      $croot setAttribute $option $value
+    } else {
+      set attr [lassign [split $option .] struct]
+      if {[lsearch {target1 target2 target3} $struct] == -1} {
+          error "Unknown option $option"
+      }
+      set count [string range $struct 6 end]
+  	  set node [$croot selectNodes target\[$count\]]
+  	  if {$node == ""} {
+  	    set present [llength [$croot selectNodes target]]
+  	    for {set ii $present} {$ii < 3} {incr ii} {
+  	        $croot appendFromScript {
+  	            domNode::target -active false \
+  	                            -superflowName "" \
+  	                            -fieldType "phone" \
+  	                            -intervalType "quantity" \
+  	                            -timeInterval "" \
+  	                            -quantityInterval "10000"
+  	        }
+  	    }
+  	    set node [$croot selectNodes target\[$count\]]
+  	  }
+      switch -exact -- $attr {
+  		active -
+  		superflowName -
+  		ipTrigger - 
+  		fieldType -
+  		intervalType -
+  		timeInterval -
+  		quantityInterval {
+          $node setAttribute $attr $value
+        }
+        default {
+          lappend datadrivenparams($count) [join $attr .] $value
+        }
+      }
+    }
+  }
+  # add the data driven stuff to the request
+  foreach {structix vals} [array get datadrivenparams] {
+      set structnode [$croot selectNodes "target\[$structix\]"]
+      set paramtype [_getTriggerParamObj [$structnode @fieldType]]
+      try {
+          set param [$paramtype #auto -value $vals]
+          dom parse [$param paramSpec flow] paramdoc
+          $paramdoc documentElement paramroot
+      } finally {
+          if {[info exists param]} {
+              itcl::delete object $param
+          }
+          namespace delete [namespace qualifiers $paramtype]
+      }
+      foreach setting [$paramroot selectNodes child::node()] {
+          $structnode appendChild $setting
+      }
+  }
+  $root appendChild $croot
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+
+  return
+}
+
+package provide bps::LawfulInterceptClient 0.1

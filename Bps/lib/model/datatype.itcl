@@ -1,0 +1,1019 @@
+package require Itcl
+package require cmdline
+package require tryfinally
+package require tdom
+package require domunknown
+
+namespace eval model {
+  namespace export \
+         defineEnum \
+     	 defineDuration \
+	 defineInt \
+	 defineScalarParam \
+	 defineHex \
+	 defineFloat \
+	 defineFlowId \
+	 defineBoolean \
+	 defineString \
+	 defineFile \
+	 defineFilename \
+	 defineNetDomain \
+	 defineLoadProfile \
+	 defineSuperFlow \
+	 defineAttackPlan \
+	 defineAttackProfile \
+	 defineAppProfile \
+	 defineDynStruct \
+	 defineIPv4 \
+	 defineStruct \
+	 defineReference \
+	 defineTags
+}
+
+#
+# DataType is the base class for all dynamically-generated types.
+#
+itcl::class model::DataType {
+  public variable value
+  public variable component {}
+  public variable model {}
+  public variable itemname {}
+  public variable context {}
+
+  protected variable _type {}
+
+  public method paramSpec {key {indent {}}} {
+    dom createDocument param doc
+    $doc documentElement root
+    $root setAttribute id $key
+    $root appendFromScript {
+      domNode::text [$this cget -value]
+    }
+    return [$doc asXML -indent [string length $indent]]
+  }
+
+  public method typedParamSpec {key {indent {}}} {
+    dom createDocument $_type doc
+    $doc documentElement root
+    $root setAttribute id $key
+    $root appendFromScript {
+      domNode::text [$this cget -value]
+    }
+    return [$doc asXML -indent [string length $indent]]
+  }
+
+  public method localname {} {
+    return $itemname
+  }
+}
+
+itcl::class model::Enum {
+  inherit model::DataType
+}
+
+itcl::class model::Numeric {
+  inherit model::DataType
+}
+
+itcl::class model::Boolean {
+  inherit model::Numeric
+}
+
+itcl::class model::Int {
+  inherit model::Numeric
+}
+
+itcl::class model::Hex {
+  inherit model::Numeric
+}
+
+itcl::class model::Float {
+  inherit model::Numeric
+}
+
+itcl::class model::FlowId {
+  inherit model::Numeric
+}
+
+itcl::class model::Duration {
+  inherit model::DataType
+}
+
+itcl::class model::String {
+  inherit model::DataType
+}
+
+itcl::class model::Filename {
+  inherit model::DataType
+}
+
+itcl::class model::File {
+  inherit model::DataType
+}
+
+itcl::class model::NetDomain {
+  inherit model::DataType
+}
+
+itcl::class model::AttackPlan {
+  inherit model::DataType
+}
+
+itcl::class model::AttackProfile {
+  inherit model::DataType
+}
+
+itcl::class model::SooperFlow {
+  inherit model::DataType
+}
+
+itcl::class model::ApplicationProfile {
+  inherit model::DataType
+}
+
+itcl::class model::Mac {
+  inherit model::DataType
+}
+
+itcl::class model::LoadProfile {
+  inherit model::DataType
+}
+
+itcl::class model::IP {
+  inherit model::DataType
+}
+
+itcl::class model::IPv4 {
+  inherit model::IP
+
+  public proc intValue {ipaddr} {
+    set octets [split $ipaddr .]
+    if {[llength $octets] != 4} {
+      error "ip address must be of the form xx.xx.xx.xx" \
+         {} [list INVALID_IP "" $ipaddr]
+    }
+    # force 64 bit (to get unsigned behavior) - this will shift away
+    set intval 0x100000000
+    foreach octet $octets {
+      if {![string is integer $octet]
+	  || $octet < 0
+	  || $octet > 255} {
+	error "ip address must be of the form xx.xx.xx.xx" \
+	   {} [list INVALID_IP "" $ipaddr]
+      }
+      set intval [expr ($intval << 8) + $octet]
+    }
+    return $intval
+  }
+}
+
+itcl::class model::IPv6 {
+  inherit model::IP
+}
+
+itcl::class model::Struct {
+  inherit model::DataType
+}
+
+itcl::class model::DynStruct {
+  inherit model::Struct
+}
+
+itcl::class model::List {
+  inherit model::DataType
+}
+
+itcl::class model::HostRef {
+  inherit model::DataType
+}
+
+itcl::class model::Reference {
+  inherit model::DataType
+}
+
+itcl::class model::Tags {
+  inherit model::DataType
+}
+#
+# load a template file, make the required substitutions, and then eval it
+# to create the new data type
+#
+proc model::_loadTemplate {namespc type args} {
+  set f [open [file join ${::model::templatedir} ${type}.itcl.template]]
+  try {
+    set cmds [read $f]
+  } finally {
+    close $f
+  }
+  foreach {subststring value} $args {
+    regsub -all %$subststring% $cmds $value cmds
+  }
+  namespace eval $namespc $cmds
+}
+
+proc model::defineEnum {namespc typename choices {default {}}} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  if {"" == $default} {
+    set default [lindex $choices 0]
+  }
+  _loadTemplate $namespc enum \
+         CLASS ${namespc}::$typename \
+	 CHOICES $choices \
+	 DEFAULT $default
+  return ${namespc}::$typename
+}
+
+proc model::defineDuration {namespc typename min max {default min}} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  if {"min" == $default} {
+    set default $min
+  }
+  _loadTemplate $namespc duration \
+         CLASS ${namespc}::$typename \
+	 MIN $min \
+	 MAX $max \
+	 DEFAULT $default
+  return ${namespc}::$typename
+}
+
+
+proc model::defineInt {namespc typename min max {default min}} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  if {[catch {expr $min}]} {
+    error "min must be an integer, received $min" {} RUNTIME_ERROR
+  }
+  if {[catch {expr $max}]} {
+    error "max must be an integer, received $max" {} RUNTIME_ERROR
+  }
+  if {"min" == $default} {
+    set default $min
+  } elseif {[catch {expr $default}]} {
+    error "default must be an integer or 'min', received $default" {} RUNTIME_ERROR
+  }
+  _loadTemplate $namespc int \
+         CLASS ${namespc}::$typename \
+	 MIN $min \
+	 MAX $max \
+	 DEFAULT $default
+  return ${namespc}::$typename
+}
+
+proc model::defineScalarParam {namespc typename {min 0} {max 100} {default 100}} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  if {![string is integer $min]} {
+    error "min must be an integer, received $min" {} RUNTIME_ERROR
+  }
+  if {![string is integer $max]} {
+    error "max must be an integer, received $max" {} RUNTIME_ERROR
+  }
+  if {"min" == $default} {
+    set default $min
+  } elseif {![string is integer $default]} {
+    error "default must be an integer or 'min', received $default" {} RUNTIME_ERROR
+  }
+  _loadTemplate $namespc scalarparam \
+         CLASS ${namespc}::$typename \
+	 MIN $min \
+	 MAX $max \
+	 DEFAULT $default
+  return ${namespc}::$typename
+}
+
+proc model::defineHex {namespc typename min max {default min}} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  if {![string is integer 0x$min]} {
+    error "min must be a hex integer, received $min" {} RUNTIME_ERROR
+  }
+  if {![string is integer 0x$max]} {
+    error "max must be a hex integer, received $max" {} RUNTIME_ERROR
+  }
+  if {"min" == $default} {
+    set default $min
+  } else {
+    if {![string is integer 0x$default]} {
+      error "default must be a hex integer or 'min', received $default" {} RUNTIME_ERROR
+    }
+    set default 0x$default
+  }
+  _loadTemplate $namespc hex \
+         CLASS ${namespc}::$typename \
+	 MIN 0x$min \
+	 MAX 0x$max \
+	 DEFAULT $default
+  return ${namespc}::$typename
+}
+
+proc model::defineFloat {namespc typename min max {default min}} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  if {![string is double $min]} {
+    error "min must be a float, received $min" {} RUNTIME_ERROR
+  }
+  if {![string is double $max]} {
+    error "max must be a float, received $max" {} RUNTIME_ERROR
+  }
+  if {"min" == $default} {
+    set default $min
+  }
+  _loadTemplate $namespc float \
+         CLASS ${namespc}::$typename \
+	 MIN $min \
+	 MAX $max \
+	 DEFAULT $default
+  return ${namespc}::$typename
+}
+
+proc model::defineFlowId {namespc typename {default 1}} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  _loadTemplate $namespc flowid \
+         CLASS ${namespc}::$typename \
+         DEFAULT $default
+  return ${namespc}::$typename
+}
+
+proc model::defineBoolean {namespc typename {default false}} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  _loadTemplate $namespc boolean \
+         CLASS ${namespc}::$typename \
+	 DEFAULT $default
+  return ${namespc}::$typename
+}
+
+proc model::defineString {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  array set opts [cmdline::getoptions args {
+    {minlength.arg 0 "minimum string length"}
+    {maxlength.arg {} "maximum string length"}
+    {charclass.arg {} "character class of string"}
+    {default.arg {} "default value of string"}
+  }]
+  if {![string is integer -strict $opts(minlength)]} {
+    error "minlength must be an integer" {} RUNTIME_ERROR
+  }
+  if {![string is integer $opts(maxlength)]} {
+    error "maxlength must be an integer" {} RUNTIME_ERROR
+  }
+  if {"" != $opts(charclass) && [catch {string is $opts(charclass) "foo"} err]} {
+    error $err {} RUNTIME_ERROR
+  }
+  _loadTemplate $namespc string \
+         CLASS ${namespc}::$typename \
+	 CHARCLASS $opts(charclass) \
+	 MINLENGTH $opts(minlength) \
+	 MAXLENGTH $opts(maxlength) \
+	 DEFAULT $opts(default)
+  return ${namespc}::$typename
+}
+
+proc model::defineFile {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  array set opts [cmdline::getoptions args {
+    {root.arg 0 "root directory"}
+    {filter.arg {} "filename filter"}
+    {uploadURL.arg {} "upload URL (for UI)"}
+    {recurse.arg true "recurse into subdirs"}
+    {includeDirs.arg false "include directories in resulting list"}
+    {append.arg {} "extension to append implicitly"}
+    {default.arg {} "default value of filename"}
+    {allowEmpty.arg false "allow the empty string as a valid option"}
+  }]
+  _loadTemplate $namespc file \
+         CLASS ${namespc}::$typename \
+	 ROOT $opts(root) \
+	 DEFAULT $opts(default) \
+   APPEND $opts(append)
+  return ${namespc}::$typename
+}
+
+proc model::defineFilename {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  array set opts [cmdline::getoptions args {
+    {root.arg 0 "root directory"}
+    {filter.arg {} "filename filter"}
+    {uploadURL.arg {} "upload URL (for UI)"}
+    {recurse.arg true "recurse into subdirs"}
+    {includeDirs.arg false "include directories in resulting list"}
+    {append.arg {} "extension to append implicitly"}
+    {default.arg {} "default value of filename"}
+    {allowEmpty.arg false "allow the empty string as a valid option"}
+  }]
+  _loadTemplate $namespc filename \
+         CLASS ${namespc}::$typename \
+	 ROOT $opts(root) \
+	 DEFAULT $opts(default) \
+   APPEND $opts(append)
+  return ${namespc}::$typename
+}
+
+proc model::defineLoadProfile {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  array set opts [cmdline::getoptions args {
+  }]
+  _loadTemplate $namespc loadprofile \
+         CLASS ${namespc}::$typename
+  return ${namespc}::$typename
+}
+
+proc model::defineSuperFlow {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  array set opts [cmdline::getoptions args {
+  }]
+  _loadTemplate $namespc sooperflow \
+         CLASS ${namespc}::$typename
+  return ${namespc}::$typename
+}
+
+
+
+proc model::defineAttackPlan {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  array set opts [cmdline::getoptions args {
+    {uploadURL.arg {} "upload URL"}
+  }]
+  _loadTemplate $namespc attackplan \
+         CLASS ${namespc}::$typename
+  return ${namespc}::$typename
+}
+
+proc model::defineAttackProfile {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  array set opts [cmdline::getoptions args {
+  }]
+  _loadTemplate $namespc attackprofile \
+         CLASS ${namespc}::$typename
+  return ${namespc}::$typename
+}
+
+proc model::defineAppProfile {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  array set opts [cmdline::getoptions args {
+  }]
+  _loadTemplate $namespc applicationprofile \
+         CLASS ${namespc}::$typename
+  return ${namespc}::$typename
+}
+
+proc model::defineDynStruct {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  array set opts [cmdline::getoptions args {
+  }]
+  _loadTemplate $namespc dynstruct \
+         CLASS ${namespc}::$typename
+  return ${namespc}::$typename
+}
+
+proc model::defineIPv4 {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  global errorInfo errorCode
+  array set opts [cmdline::getoptions args {
+    {min.arg 0.0.0.0 "minimum ip address"}
+    {max.arg 255.255.255.255 "maximum ip address"}
+    {only_dot_notation.arg false "Only dot notation"}
+    {default.arg 0.0.0.0 "default value of address"}
+  }]
+  # this conversion will check for valid format
+  if {[catch {
+    set min [IPv4::intValue $opts(min)]
+    set max [IPv4::intValue $opts(max)]
+  } err]} {
+    error $err $errorInfo $errorCode
+  }
+  if {$min > $max} {
+    error "min must be less than max" {} RUNTIME_ERROR
+  }
+  _loadTemplate $namespc ipv4 \
+         CLASS ${namespc}::$typename \
+	 MIN $opts(min) \
+	 MAX $opts(max) \
+	 DEFAULT $opts(default)
+  return ${namespc}::$typename
+}
+
+proc model::defineIPv6 {namespc typename args} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  global errorInfo errorCode
+  array set opts [cmdline::getoptions args {
+    {min.arg "::" "minimum ip6 address"}
+    {max.arg "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" "maximum ip6 address"}
+    {only_dot_notation.arg false "Only dot notation"}
+    {default.arg "::" "default value of address"}
+  }]
+  _loadTemplate $namespc ip6_address \
+         CLASS ${namespc}::$typename \
+	 MIN $opts(min) \
+	 MAX $opts(max) \
+	 DEFAULT $opts(default)
+  return ${namespc}::$typename
+}
+
+proc model::defineMac {namespc typename {default 00:00:00:00:00:00}} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  #????????? validate input
+  _loadTemplate $namespc mac \
+        CLASS ${namespc}::$typename \
+	DEFAULT $default
+  return ${namespc}::$typename
+}
+
+proc model::defineStruct {namespc typename members constraints} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  #????????? validate input
+  #????????? check for invalid member names
+  #????????? check for duplicate member names
+  #????????? check for members w/ undefined types
+  _loadTemplate $namespc struct \
+         CLASS ${namespc}::$typename \
+	 MEMBERS $members \
+	 CONSTRAINTS $constraints
+  return ${namespc}::$typename
+}
+
+proc model::defineList {namespc typename membertype} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  #????????? validate input
+
+  _loadTemplate $namespc list \
+         CLASS ${namespc}::$typename \
+	 MEMBERTYPE $membertype
+  return ${namespc}::$typename
+}
+
+proc model::defineHostRef {namespc typename} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  #????????? validate input
+
+  _loadTemplate $namespc hostref \
+         CLASS ${namespc}::$typename
+  return ${namespc}::$typename
+}
+
+proc model::defineReference {namespc typename} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  #????????? validate input
+  _loadTemplate $namespc reference \
+         CLASS ${namespc}::$typename
+  return ${namespc}::$typename
+}
+
+proc model::defineTags {namespc typename} {
+  if {[itcl::find classes ${namespc}::$typename] != ""} {
+    # assume this is a duplicate
+    return ${namespc}::$typename
+  }
+  #????????? validate input
+  _loadTemplate $namespc tags \
+         CLASS ${namespc}::$typename
+  return ${namespc}::$typename
+}
+
+set model::_typecount 0
+proc model::processTypeDeclarationList {namespace xmlnode} {
+  global model::_typecount
+
+  if {$xmlnode == ""} {
+  	  return {}
+  }
+  set ret {}
+  foreach child [$xmlnode selectNodes child::*] {
+    set nodename [$child nodeName]
+    switch $nodename {
+      constraints -
+      \#text -
+      \#comment -
+      label -
+      description {}
+      default {
+	if {[$child hasAttribute oftype]} {
+	  set typename ::types::[$child @oftype]
+	} else {
+	  if {[$child hasAttribute name]} {
+	    # declaring a named type
+	    set typename [$child @name]
+	  } elseif {[$child hasAttribute id]} {
+	    set typename [$child @id]
+	  } else {
+	    set typename unnamed[incr _typecount]
+	  }
+          set datatype [$child nodeName]
+          if {$datatype == "filename"
+          	  && [$child selectNodes choice] != ""} {
+          	set datatype enum
+          }
+          if {$datatype == "file"
+          	  && [$child selectNodes choice] != ""} {
+          	set datatype enum
+          }
+          if {[catch {
+            set typename [model::processXML_$datatype \
+                          $namespace $typename $child]
+          } err]} {
+            log::log error "Error parsing: [$child asXML]"
+            global errorInfo errorCode
+            error $errorInfo $errorCode $err
+          }
+	}
+	if {$typename != ""} {
+	    if {[$child hasAttribute name]} {
+	      lappend ret [$child @name] $typename
+	    } elseif {[$child hasAttribute id]} {
+	      lappend ret [$child @id] $typename
+	    }
+	}
+      }
+    }
+  }
+  return $ret
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_enum {namespace typename xmlnode} {
+  set choices {}
+  foreach choice [$xmlnode selectNodes choice] {
+    lappend choices [$choice @name]
+  }
+  return [model::defineEnum $namespace $typename $choices [$xmlnode @default {}]]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_duration {namespace typename xmlnode} {
+  set max [$xmlnode @max ""]
+  set min [$xmlnode @min 0]
+  return [model::defineDuration $namespace $typename $min $max [$xmlnode @default min]]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_int {namespace typename xmlnode} {
+  set max [$xmlnode @max 4294967295]
+  set min [$xmlnode @min 0]
+  return [model::defineInt $namespace $typename $min $max [$xmlnode @default min]]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_scalarParam {namespace typename xmlnode} {
+  set max [$xmlnode @max 4294967295]
+  set min [$xmlnode @min 0]
+  return [model::defineScalarParam $namespace $typename $min $max [$xmlnode @default 100]]
+}
+
+proc model::processXML_hex {namespace typename xmlnode} {
+  set max [$xmlnode @max ffffffff]
+  set min [$xmlnode @min 0]
+  return [model::defineHex $namespace $typename $min $max [$xmlnode @default min]]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_float {namespace typename xmlnode} {
+  set max [$xmlnode @max 4294967295]
+  set min [$xmlnode @min 0]
+  return [model::defineFloat $namespace $typename $min $max [$xmlnode @default min]]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_flowid {namespace typename xmlnode} {
+  return [model::defineFlowId $namespace $typename [$xmlnode @default 1]]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_boolean {namespace typename xmlnode} {
+  return [model::defineBoolean $namespace $typename [$xmlnode @default false]]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_string {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+	if {$key == "deprecate"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineString $namespace $typename] $flags]
+  }
+  return [model::defineString $namespace $typename]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_file {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {$key == "deprecate"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineFile $namespace $typename] $flags]
+  }
+  return [model::defineFile $namespace $typename]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_filename {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {$key == "deprecate"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineFilename $namespace $typename] $flags]
+  }
+  return [model::defineFilename $namespace $typename]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_loadprofile {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {$key == "deprecate"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineLoadProfile $namespace $typename] $flags]
+  }
+  return [model::defineLoadProfile $namespace $typename]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_superflow {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {$key == "deprecate"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineSuperFlow $namespace $typename] $flags]
+  }
+  return [model::defineSuperFlow $namespace $typename]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_attackplan {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {$key == "deprecate"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineAttackPlan $namespace $typename] $flags]
+  }
+  return [model::defineAttackPlan $namespace $typename]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_attackprofile {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {$key == "deprecate"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineAttackProfile $namespace $typename] $flags]
+  }
+  return [model::defineAttackProfile $namespace $typename]
+}
+
+proc model::processXML_appprofile {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {$key == "deprecate"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineAppProfile $namespace $typename] $flags]
+  }
+  return [model::defineAppProfile $namespace $typename]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_dynstruct {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineDynStruct $namespace $typename] $flags]
+  }
+  return [model::defineDynStruct $namespace $typename]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_ipv4 {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {$key == "deprecate"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineIPv4 $namespace $typename] $flags]
+  }
+  return [model::defineIPv4 $namespace $typename]
+}
+
+proc model::processXML_ip_address {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineIPv4 $namespace $typename] $flags]
+  }
+  return [model::defineIPv4 $namespace $typename]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_ip6_address {namespace typename xmlnode} {
+  foreach key [$xmlnode attributes] {
+    if {$key == "name"} continue
+    if {$key == "enabled"} continue
+    if {[llength $key] > 1} continue
+    lappend flags -$key [$xmlnode @$key]
+  }
+  if {[info exists flags]} {
+    return [eval [list model::defineIPv6 $namespace $typename] $flags]
+  }
+  return [model::defineIPv6 $namespace $typename]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_struct {namespace typename xmlnode} {
+  set memberlist [model::processTypeDeclarationList ${namespace}::$typename \
+                       [$xmlnode selectNodes members]]
+  set constraintlist {}
+  return [model::defineStruct $namespace $typename \
+	  $memberlist \
+	  $constraintlist]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_mac {namespace typename xmlnode} {
+  return [model::defineMac $namespace $typename \
+                 [$xmlnode @default 00:00:00:00:00:00]]
+}
+proc model::processXML_mac_address {namespace typename xmlnode} {
+  return [model::defineMac $namespace $typename \
+                 [$xmlnode @default 00:00:00:00:00:00]]
+}
+
+#
+# create a datatype class describing the type defined in XML
+#
+proc model::processXML_list {namespace typename xmlnode} {
+  set memberlist [model::processTypeDeclarationList ${namespace}::$typename $xmlnode]
+  if {[llength $memberlist] != 2} {
+    error "invalid list declaration; needs exactly one type inside" {} \
+	  RUNTIME_ERROR
+  }
+  set membertype [lindex $memberlist 1]
+  return [model::defineList $namespace $typename $membertype]
+}
+
+proc model::processXML_hostref {namespace typename xmlnode} {
+  return [model::defineHostRef $namespace $typename]
+}
+
+proc model::processXML_reference {namespace typename xmlnode} {
+  return [model::defineReference $namespace $typename]
+}
+
+proc model::processXML_tags {namespace typename xmlnode} {
+  return [model::defineTags $namespace $typename]
+}
+
+#
+# ignore these special cases
+# 
+proc model::processXML_impairments {namespace typename xmlnode} {
+  return {}
+}
+proc model::processXML_packet_filter {namespace typename xmlnode} {
+  return {}
+}
+

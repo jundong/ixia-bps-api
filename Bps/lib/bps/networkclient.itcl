@@ -1,0 +1,665 @@
+itcl::class bps::NetworkClient {
+  inherit bps::Client
+
+  constructor {bpsobj template args} {
+    Client::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _committedDoc
+  protected variable _committedRoot
+  protected variable _xmldoc
+  protected variable _xmlroot
+  protected variable _in_transaction false
+  protected variable _tentative_objs {}
+  protected variable _element
+
+  protected common _elementDescriptors
+
+  public method getTags {}
+  public method elementTypes {}
+
+  public method getAll {type args}
+  public method get {type id}
+  public method add {type args}
+  public method remove {type args}
+  public method save {args}
+
+  public method getPaths {}
+  public method addPath {endpointid1 endpointid2}
+  public method removePath {endpointid1 endpointid2}
+
+  public method begin {}
+  public method commit {}
+  public method revert {}
+
+  public method _getXML {} { return [$_xmldoc asXML]}
+  protected method _xmlroot {}
+  protected method _tryChange {cmd {level 1}}
+  protected method _newString {domnode text}
+  protected method _findElement {nodename id}
+  protected method _checkFor {nodename string id}
+  protected method _createAll {nodetype query}
+  protected method _removeElement {nodename id}
+  protected method _deleteElement {nodename id}
+  protected method _removeChildren {id}
+  protected method _registerTentative {obj}
+  protected method _genId {nodename}
+  protected method _reopt {arglist}
+  protected method _locationQuery {container tags interface outer_vlan inner_vlan}
+
+  protected method _xpathEscape {string}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+  protected method _createCommand {docvar rootvar command}
+}
+
+itcl::body bps::NetworkClient::constructor {
+	  bpsobj template args} {
+  if {[string compare $template ""] != 0} {
+    _createCommand doc root neighborhoodInfo 
+    $root setAttribute convert true
+    $root setAttribute name $template
+    set ret [$_bpsobj _execXml [$doc asXML]]
+    set _committedDoc [dom parse $ret]
+  } else {
+    set _committedDoc [dom parse {
+<network name="">
+    <params/>
+    <label><string></string></label>
+</network>
+    }]
+  }
+  $_committedDoc documentElement _committedRoot
+  set _xmldoc [dom parse [$_committedRoot asXML]]
+  $_xmldoc documentElement _xmlroot
+  set name [$_xmlroot @name [namespace tail $this]]
+  array set _default [list name $name]
+
+  configure -name $name
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::NetworkClient::destructor {} {
+    begin ;# prevent validation as we go
+    foreach {id obj} [array get _element] {
+        if {[itcl::find object $obj] != ""} {
+            if {[catch {itcl::delete object $obj} err]} {
+                puts stderr $err
+            }
+        }
+    }
+    foreach obj $_tentative_objs {
+        if {[itcl::find object $obj] != ""} {
+            catch {itcl::delete object $obj}
+        }
+    }
+    $_xmldoc delete
+    $_committedDoc delete
+}
+
+itcl::body bps::NetworkClient::getTags {} {
+    set ret {}
+    foreach tag [$_xmlroot selectNodes //tag] {
+        if {[lsearch $ret [$tag @id]] == -1} {
+            lappend ret [$tag @id]
+        }
+    }
+    return $ret
+}
+
+itcl::body bps::NetworkClient::elementTypes {} {
+    set ret {}
+    set ndoc [namespace inscope ::bps::BPSConnection $_bpsobj _networkDoc]
+    foreach type [$ndoc selectNodes "element"] {
+        set label [$type selectNodes "label/child::node()"]
+        if {$label != ""} {
+            set label [$label asText]
+        }
+        set category [$type selectNodes "category/child::node()"]
+        if {$category != ""} {
+            set category [$category asText]
+        }
+        set description [$type selectNodes "description/child::node()"]
+        if {$description != ""} {
+            set description [$description asText]
+        }
+        lappend ret [$type @name] [list label $label category $category description $description]
+    }
+    return $ret
+}
+
+itcl::body bps::NetworkClient::getAll {type args} {
+    set optlist {
+      {container.arg {} "limit results to elements connected to the given element ID"}
+      {tags.arg {} "limit results to elements having the given tags"}
+      {interface.arg {} "limit results to elements on the given interface"}
+      {outer_vlan.arg {} "limit results to elements in VLAN having the given outer VID"}
+      {inner_vlan.arg {} "limit results to elements in VLAN having the given inner VID"}
+    }
+    array set opts [cmdline::getoptions args $optlist "getAll options:"]
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "getAll $type options:"]
+    }
+    return [_createAll $type [_locationQuery $opts(container) \
+                                             $opts(tags) \
+                                             $opts(interface) \
+                                             $opts(outer_vlan) \
+                                             $opts(inner_vlan)]]
+}
+
+itcl::body bps::NetworkClient::get {type id} {
+    if {![info exists _element($type,$id)]} {
+        set element [_findElement $type $id]
+        set _element($type,$id) [namespace which [bps::NetworkElement #auto \
+                $_bpsobj [namespace which $this] $element]]
+    }
+    return $_element($type,$id)
+}
+
+itcl::body bps::NetworkClient::add {type args} {
+    # build an optlist for the specified type
+    set ndoc [namespace inscope ::bps::BPSConnection $_bpsobj _networkDoc]
+    set elementType [$ndoc selectNodes "element\[@name='$type'\]"]
+    if {$elementType == ""} {
+        set alltypes {}
+        foreach onetype [$ndoc selectNodes element/@name] {
+            lappend alltypes [lindex $onetype 1]
+        }
+        error "Unknown element type $type, must be one of: [join $alltypes {, }]"
+    }
+    set optlist [_optlist [$elementType selectNodes parameters] {}]
+    array set opts [cmdline::getoptions args $optlist "add $type options:"]
+
+    if {($type == "interface")&&($opts(mac_address) == "")} {
+        puts "Please specify mac_address now or you will not be able to add hosts."
+    }
+
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "add $type options:"]
+    }
+
+    if {[info exists opts(id)]} {
+        set id $opts(id)
+        unset opts(id)
+    } else {
+        set id ""
+    }
+    if {$id == ""} {
+        set id [_genId $type]
+    }
+    _tryChange {
+        set nm [$xmlroot selectNodes networkModel]
+        if {$nm == ""} {
+            $xmlroot appendFromScript {
+                set nm [domNode::networkModel]
+            }
+        }
+        if {[$nm selectNodes element\[string\[@id='id'\]/child::node()='$id'\]]!=""} {
+            error "ID \"$id\" already exists"
+        }
+        $nm appendFromScript {
+            domNode::element -type $type {
+                domNode::string -id id {
+                    domNode::text $id
+                }
+            }
+        }
+        set obj [get $type $id]
+        _registerTentative $obj
+        eval [list $obj configure] [_reopt opts]
+    }
+    return [list $id $obj]
+}
+
+itcl::body bps::NetworkClient::remove {type id} {
+    _removeElement $type $id
+    return
+}
+
+itcl::body bps::NetworkClient::getPaths {} {
+	set conns [$_xmlroot selectNodes networkModel/connections]
+	if {$conns == ""} {return ""}
+	set ret {}
+	foreach conn [$conns selectNodes connection] {
+		foreach child [$conn selectNodes endpoint/child::node()] {
+			lappend ret [$child asText]
+		}
+	}
+	return $ret
+}
+
+itcl::body bps::NetworkClient::addPath {endpointid1 endpointid2} {
+    _tryChange {
+        set nm [$xmlroot selectNodes networkModel]
+        if {$nm == ""} {
+  		    $xmlroot appendFromScript {
+  		        set nm [domNode::networkModel]
+  		    }
+        }
+
+        set conns [$nm selectNodes connections]
+        if {$conns == ""} {
+  		    $nm appendFromScript {
+  		        set conns [domNode::connections]
+  		    }
+  	    }
+        $conns appendFromScript {
+  		    domNode::connection {
+  		        domNode::endpoint {
+  		            domNode::text $endpointid1
+  		        }
+  		        domNode::endpoint {
+  		            domNode::text $endpointid2
+  		        }
+  		    }
+        }
+    }
+    return
+}
+
+itcl::body bps::NetworkClient::removePath {endpointid1 endpointid2} {
+    _tryChange {
+        set conns [$xmlroot selectNodes networkModel/connections]
+        if {$conns == ""} {
+  		    error "path not found"
+        }
+        foreach conn [$conns selectNodes "connection\[endpoint/child::node() = '$endpointid1' and endpoint/child::node() = '$endpointid2'\]"] {
+            $conns removeChild $conn
+        }
+    }
+    return
+}
+
+itcl::body bps::NetworkClient::save {args} {
+  set optlist {
+      {name.arg {} "saved app profile name"}
+      {force false "overwrite"}
+      {file.arg \0 "file name"}
+      {channel.arg \0 "channel name"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+  if {$opts(force)} {
+  		set opts(force) "true"
+  } else {
+  		set opts(force) "false"
+  }
+  if {$opts(name) != ""} {
+    configure -name $opts(name)
+  }
+  if {$opts(file) != "\0"} {
+    if {!$opts(force) && [file exists $opts(file)]} {
+      error "File \"$opts(file)\" exists, you must use -force to overwrite"
+    }
+    set chan [open $opts(file) w]
+  } elseif {$opts(channel) != "\0"} {
+    set chan $opts(channel)
+  } else {
+      # save it on the box
+      _createCommand doc root neighborhoodSave
+      foreach attr {force} {
+        $root setAttribute $attr $opts($attr)
+      }
+      $root setAttribute regenerateOldStyle true
+      $root appendXML [$_xmlroot asXML]
+      $_bpsobj _execXml [$root asXML]
+      return
+  }
+  try {
+      # save to file
+      puts $chan [$_xmlroot asXML]
+  } finally {
+    if {$opts(file) != "\0"} {
+      close $chan
+    }
+  }
+}
+
+itcl::body bps::NetworkClient::begin {} {
+    set _in_transaction true
+    return
+}
+
+itcl::body bps::NetworkClient::commit {} {
+    if {!$_in_transaction} return
+    if {[catch {
+        dom createDocument neighborhoodValidate validatedoc
+        $validatedoc documentElement validateroot
+        $validateroot appendXML [$_xmlroot asXML]
+        $_bpsobj _execXml [$validateroot asXML]
+    } err]} {
+        revert
+        # propagate the error
+        global errorCode errorInfo
+        error $err $errorInfo $errorCode
+    }
+    # commit the changes
+    $_committedDoc delete
+    set _committedDoc [dom parse [$_xmlroot asXML]]
+    $_committedDoc documentElement _committedRoot
+    set _tentative_objs {}
+    set _in_transaction false
+    return
+}
+
+itcl::body bps::NetworkClient::revert {} {
+    if {!$_in_transaction} return
+    foreach obj $_tentative_objs {
+        itcl::delete object $obj
+    }
+    set _in_transaction false
+    $_xmldoc delete
+    set _xmldoc [dom parse [$_committedRoot asXML]]
+    $_xmldoc documentElement _xmlroot
+    set _tentative_objs {}
+    return
+}
+
+itcl::body bps::NetworkClient::_xmlroot {} {
+    return $_xmlroot
+}
+
+itcl::body bps::NetworkClient::_tryChange {cmd {level 1}} {
+    # first make a copy of the neighborhood XML to make the change in, in the
+    # caller's call scope
+    set commit false
+    if {!$_in_transaction} {
+        set commit true
+        begin
+    }
+    upvar $level xmldoc xmldoc
+    upvar $level xmlroot xmlroot
+    set xmldoc $_xmldoc
+    set xmlroot $_xmlroot
+    if {[catch {
+        # now run the caller-provided script to actually change the XML
+        uplevel $level $cmd
+    } err]} {
+        global errorCode errorInfo
+        set ec $errorCode
+        set ei $errorInfo
+        # if any part of a transaction errors out, we revert everything prior
+        revert
+        # propagate the error
+        error $err $ei $ec
+    } else {
+        # validation succeeded, commit the change
+        if {$commit} {
+            commit
+        }
+    }
+}
+
+itcl::body bps::NetworkClient::_newString {domnode text} {
+    foreach chld [$domnode selectNodes child::node()] {
+        $domnode removeChild $chld
+    }
+    $domnode appendFromScript {
+        domNode::string {
+            domNode::text $text
+        }
+    }
+}
+
+itcl::body bps::NetworkClient::_findElement {nodename id} {
+    set element [$_xmlroot selectNodes "networkModel/element\[@type='$nodename'\]\[string\[@id='id'\]/child::node()='[_xpathEscape $id]'\]\[1\]"]
+    if {$element == ""} {
+        set label [[namespace inscope ::bps::BPSConnection $_bpsobj _networkDoc] selectNodes "element\[@name='$nodename'\]/label/child::node()"]
+        if {$label != ""} {
+            set label [$label asText]
+        }
+        error "$label not found: $id"
+    }
+    return $element
+}
+
+itcl::body bps::NetworkClient::_checkFor {nodename string id} {
+    if {[$_xmlroot selectNodes "$nodename\[@id='[_xpathEscape $id]'\]\[1\]"] != ""} {
+        error "$string $id already exists"
+    }
+}
+
+itcl::body bps::NetworkClient::_createAll {nodetype query} {
+    set ret {}
+    foreach element [$_xmlroot selectNodes networkModel/element\[@type='$nodetype'\]$query] {
+        set id [$element selectNodes {string[@id='id']/child::node()}]
+        if {$id != ""} {
+            set id [$id asText]
+        }
+        lappend ret $id [get $nodetype $id]
+    }
+    if {[llength $ret] == 0} {
+        # see if we can offer a helpful error message
+        set types [dict keys [elementTypes]]
+        if {[lsearch $types $nodetype] == -1} {
+            error "Invalid element type \"$nodetype\", must be one of: [join $types ", "]"
+        }
+    }
+    return $ret
+}
+
+itcl::body bps::NetworkClient::_removeElement {nodename id} {
+    if {[info exists _element($nodename,$id)]} {
+        itcl::delete object $_element($nodename,$id)
+    } else {
+        _tryChange {
+            set element [_findElement $nodename $id]
+            set nm [$_xmlroot selectNodes networkModel]
+            $nm removeChild $element
+            _removeChildren $id
+        }
+    }
+    return
+}
+
+itcl::body bps::NetworkClient::_deleteElement {nodename id} {
+    if {[info exists _element($nodename,$id)]} {
+        unset _element($nodename,$id)
+    }
+    _removeElement $nodename $id
+}
+
+itcl::body bps::NetworkClient::_removeChildren {id} {
+    _tryChange {
+        foreach ref [$xmlroot selectNodes \
+             "networkModel/element\[reference/child::node()='$id'\]"] {
+          set id [$ref selectNodes string\[@id='id'\]/child::node()]
+          if {$id != ""} {
+            set id [$id asText]
+          }
+          _removeElement [$ref @type] $id
+        }
+    }
+}
+
+itcl::body bps::NetworkClient::_registerTentative {obj} {
+    if {$_in_transaction} {
+        lappend _tentative_objs $obj
+    }
+}
+
+itcl::body bps::NetworkClient::_genId {nodename} {
+    set id 1
+    while {[$_xmlroot selectNodes "networkModel/element\[@type='$nodename'\]\[string\[@id='id'\]/child::node()='[_xpathEscape ${nodename}_$id]'\]"] != ""} {
+        incr id
+    }
+    return ${nodename}_$id
+}
+
+itcl::body bps::NetworkClient::_reopt {optvar} {
+    upvar $optvar opts
+    set ret {}
+    foreach {opt val} [array get opts] {
+        lappend ret -$opt $val
+    }
+    return $ret
+}
+
+itcl::body bps::NetworkClient::_locationQuery {container tags interface outer_vlan inner_vlan} {
+    set querystring ""
+    set and ""
+
+    if {$interface != "" && $outer_vlan == "" && $inner_vlan == ""} {
+        set interfacenodes [$_xmlroot selectNodes "networkModel/element\[@type='interface' and int\[@id='number'\]/child::node()='[_xpathEscape $interface]'\]/string\[@id='id']/child::node()"]
+        if {$interfacenodes != ""} {
+            append querystring "$and\("
+            set or ""
+            foreach ifnode $interfacenodes {
+                append querystring "${or}reference/child::node()='[_xpathEscape [$ifnode asText]]' or string\[@id='id'\]='[_xpathEscape [$ifnode asText]]'"
+                set or " or "
+            }
+            append querystring ")"
+        } else {
+            append querystring "${and}0"
+        }
+        set and " and "
+    }
+
+    if {$outer_vlan != ""} {
+        if {$interface == ""} {
+            set interfacenodes [$_xmlroot selectNodes \
+                "networkModel/element\[@type='vlan' \
+                                       and int\[@id='outer_vlan'\]/child::node()='[_xpathEscape $outer_vlan]'\]\
+                  /string\[@id='id']/child::node()"]
+        } else {
+            set interfacenodes [$_xmlroot selectNodes "networkModel/element\[@type='interface' and int\[@id='number'\]/child::node()='[_xpathEscape $interface]'\]/string\[@id='id']/child::node()"]
+            if {$interfacenodes != ""} {
+                set subquery ""
+                set or ""
+                foreach ifnode $interfacenodes {
+                    append subquery "${or}child::node()='[_xpathEscape [$ifnode asText]]'"
+                    set or " or "
+                }
+                set interfacenodes [$_xmlroot selectNodes \
+                    "networkModel/element\[@type='vlan' \
+       and int\[@id='outer_vlan'\]/child::node()='[_xpathEscape $outer_vlan]' \
+       and reference\[@id='default_container'\]\[$subquery\] \]
+                /string\[@id='id']/child::node()"]
+            }
+        }
+        if {$interfacenodes != ""} {
+            append querystring "$and\("
+            set or ""
+            foreach ifnode $interfacenodes {
+                append querystring "${or}reference/child::node()='[_xpathEscape [$ifnode asText]]'"
+                set or " or "
+            }
+            append querystring ")"
+        } else {
+            append querystring "${and}0"
+        }
+        set and " and "
+    }
+
+    if {$inner_vlan != ""} {
+        if {$interface == ""} {
+            set interfacenodes [$_xmlroot selectNodes \
+                "networkModel/element\[@type='vlan' \
+                                       and int\[@id='inner_vlan'\]/child::node()='[_xpathEscape $inner_vlan]'\]\
+                  /string\[@id='id']/child::node()"]
+        } else {
+            set interfacenodes [$_xmlroot selectNodes "networkModel/element\[@type='interface' and int\[@id='number'\]/child::node()='[_xpathEscape $interface]'\]/string\[@id='id']/child::node()"]
+            if {$interfacenodes != ""} {
+                set subquery ""
+                set or ""
+                foreach ifnode $interfacenodes {
+                    append subquery "${or}child::node()='[_xpathEscape [$ifnode asText]]'"
+                    set or " or "
+                }
+                set interfacenodes [$_xmlroot selectNodes \
+                    "networkModel/element\[@type='vlan' \
+       and int\[@id='inner_vlan'\]/child::node()='[_xpathEscape $inner_vlan]' \
+       and reference\[@id='default_container'\]\[$subquery\] \]
+                /string\[@id='id']/child::node()"]
+            }
+        }
+        if {$interfacenodes != ""} {
+            append querystring "$and\("
+            set or ""
+            foreach ifnode $interfacenodes {
+                append querystring "${or}reference/child::node()='[_xpathEscape [$ifnode asText]]'"
+                set or " or "
+            }
+            append querystring ")"
+        } else {
+            append querystring "${and}0"
+        }
+        set and " and "
+    }
+
+    if {$container != ""} {
+        append querystring "${and}reference/child::node()='[_xpathEscape $container]'"
+        set and " and "
+    }
+
+    foreach tag $tags {
+        append querystring "${and}tags/tag/@id = '[_xpathEscape $tag]'"
+        set and " and "
+    }
+    if {$querystring != ""} {
+        set querystring \[$querystring\]
+    }
+    return $querystring
+}
+
+itcl::body bps::NetworkClient::_xpathEscape {string} {
+    string map {
+        ' \\'
+        \" \\\"
+    } $string
+}
+
+itcl::body bps::NetworkClient::_cget {option} {
+    switch -exact -- $option {
+        name {return [$_xmlroot @name]}
+    }
+    error "Unknown option $option"
+}
+
+itcl::body bps::NetworkClient::_doConfigChange {args} {
+    _tryChange {
+        foreach {option value} $args {
+            switch -exact -- $option {
+                -name {
+                    set oldname [$xmlroot @name ""]
+                    $xmlroot setAttribute name $value
+                    set labelnode [$xmlroot selectNodes label]
+                    if {$labelnode == ""} {
+                        $xmlroot appendFromScript {
+                            domNode::label
+                        }
+                        set labelnode [$xmlroot selectNodes label]
+                    }
+                    _newString $labelnode $value
+                    # on a name change, we can no longer safely save over the
+                    # same instance number of the neighborhood having this name
+                    if {$oldname != $value && [$xmlroot hasAttribute instance]} {
+                        $xmlroot removeAttribute instance
+                    }
+                }
+                default {
+                    error "Unknown option $option"
+                }
+            }
+        }
+    }
+    return
+}
+
+
+itcl::body bps::NetworkClient::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+}
+
+package provide bps::NetworkClient 0.1

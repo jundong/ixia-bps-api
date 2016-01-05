@@ -1,0 +1,93 @@
+package require Itcl
+package require log
+package require tryfinally
+package require ifexists
+package require tdom
+package require domunknown
+
+namespace eval model {
+  namespace export protocolcomponentproxy
+}; # end of namespace installer
+
+#
+# This is a component proxy that uses ssh as the underlying protocol to talk to
+# the traffic generator and run the test component.
+# 
+itcl::class model::ProtocolComponentProxy {
+  inherit model::ComponentProxy
+
+  constructor {args} {}
+  destructor {}
+
+  public variable resource localhost
+  public variable port 0
+  public variable hostname
+
+  public method generateCmdLine {}
+  public method generateParams {{indent {}}}
+
+  protected method _appendParameters {node params}
+
+  public proc declareProxy {namespace typename paramstruct hostname}
+}
+
+proc model::protocolcomponentproxy {args} {
+  uplevel model::ProtocolComponentProxy $args
+}
+
+itcl::body model::ProtocolComponentProxy::constructor {args} {
+  eval configure $args
+}
+
+itcl::body model::ProtocolComponentProxy::destructor {} {
+}
+
+#
+# generate the command line needed to run the test component with the
+# appropriate parameter settings
+#
+itcl::body model::ProtocolComponentProxy::generateCmdLine {} {
+  return "[namespace tail [info class]]"
+}
+
+#
+# generate the parameters sent
+#
+itcl::body model::ProtocolComponentProxy::generateParams {{indent {}}} {
+  dom createDocument params doc
+  $doc documentElement root
+  _appendParameters $root [$_parameters cget -value]
+  return [$doc asXML -indent [string length $indent]]
+}
+
+itcl::body model::ProtocolComponentProxy::_appendParameters {node params} {
+  foreach {key value} $params {
+    set member [$_parameters member $key]
+    if {[itcl::is object $member]} {
+      set more [$member paramSpec $key]
+      if {$more != ""} {
+	$node appendXML $more
+      }
+    } else {
+      $node appendFromScript {
+	domNode::param -id $key {
+	  domNode::text $value
+	}
+      }
+    }
+  }
+  return
+}
+
+itcl::body model::ProtocolComponentProxy::declareProxy {namespace attrsarr paramstruct
+						  outputs bulks} {
+  array set attrs $attrsarr
+  model::_loadTemplate $namespace xmlcomponentproxy \
+       CLASS $attrs(name) \
+       PARAMSTRUCT $paramstruct \
+       DEFAULTS [] \
+       COMMTYPE ProtocolComponentProxy \
+       OUTPUTS $outputs \
+       BULKS $bulks
+}
+

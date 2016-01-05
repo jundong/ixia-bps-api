@@ -1,0 +1,174 @@
+itcl::class bps::SessionLabClient {
+  inherit bps::LabClient
+  lappend bps::LabClient::_subclasses ::bps::SessionLabClient
+
+  constructor {bpsobj args} {
+    LabClient::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  public method save {args}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+}
+
+#<l4Control
+#    minimumRate="..."
+#    maximumRate="..."
+#    minimumConcurrent="..."
+#    maximumConcurrent ="..."
+#    testMode="maxSessionOpenRat|maxSustainedRa|maxConcurrentSessions"
+#    appProfile="..."
+#    duration="HH:MM:SS"
+#    stepdurationApplication="total|periteration"
+#    dataType="zeroes|ones|random|http"
+#    testType="appsim|layer4"
+#    aging="..."
+#    retries="..."
+#    retry_quanta = "..."
+#    resetConnectionsBetweenTests="true|false"
+#    steadyBehavior="cycle|hold|cycleRstClose|cycleRst"
+#>
+#    <stepRate type="litera|percent" num="..." />
+#    <srcPortDist min="..." max="..."/>
+#    <dstPortDist min="..." max="..."/>
+#</l4Control>
+
+itcl::body bps::SessionLabClient::constructor {
+	  bpsobj args} {
+  _setWorkingModel {Session Lab} \
+                   {Custom Session Lab}
+  set control [$_xmlroot selectNodes //l4Control]
+  array set _default {}
+  foreach attr {
+    minimumRate maximumRate
+    minimumConcurrent maximumConcurrent 
+    testMode
+    appProfile
+    duration
+    stepdurationApplication
+    dataType
+    testType
+    aging
+    retries
+    retry_quanta 
+    resetConnectionsBetweenTests
+    steadyBehavior
+  } {
+  	set _default($attr) [$control @$attr ""]
+  }
+  foreach {struct attr} {
+  		stepRate type stepRate num
+  		srcPortDist min srcPortDist max
+  		dstPortDist min dstPortDist max
+  } {
+  		set node [$control selectNodes $struct]
+  		set _default($struct.$attr) [$node @$attr ""]
+  }
+  set _default(dut) [$_xmlroot @dut]
+  set _default(neighborhood) [$_xmlroot @network]
+
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::SessionLabClient::destructor {} {
+}
+
+itcl::body bps::SessionLabClient::save {args} {
+  eval [list _save {Custom Session Lab}] $args
+}
+
+itcl::body bps::SessionLabClient::_cget {option} {
+  switch -exact -- $option {
+    dut {return [$_xmlroot @dut]}
+    neighborhood {return [$_xmlroot @network]}
+  	stepRate.type -
+  	stepRate.num -
+  	srcPortDist.min -
+  	srcPortDist.max -
+    dstPortDist.min -
+    dstPortDist.max {
+  		lassign [split $option .] struct attr
+  		set node [$_xmlroot selectNodes //l4Control/$struct]
+  		return [$node @$attr ""]
+    }
+    minimumRate -
+    maximumRate -
+    minimumConcurrent -
+    maximumConcurrent -
+    testMode -
+    appProfile -
+    duration -
+    stepdurationApplication -
+    dataType -
+    testType -
+    aging -
+    retries -
+    retry_quanta  -
+    resetConnectionsBetweenTests -
+    steadyBehavior {
+      set control [$_xmlroot selectNodes //l4Control]
+  	  return [$control @$option ""]
+    }
+    default {
+      error "Unknown option $option"
+    }
+  }
+}
+
+itcl::body bps::SessionLabClient::_doConfigChange {args} {
+  set opts {dut neighborhood}
+  set oldbreakit [$_xmlroot selectNodes //breakit]
+  dom parse [$oldbreakit asXML] cdoc
+  $cdoc documentElement croot
+  set control [$croot selectNodes l4Control]
+
+  _createCommand doc root workingModelModify
+  foreach {option value} $args {
+    if {![string match -* $option]} {
+      error "Invalid option $option"
+    }
+    set option [string range $option 1 end]
+    if {[lsearch $opts $option] != -1} {
+      $root setAttribute $option $value
+    } elseif {[lsearch {
+        minimumRate maximumRate
+        minimumConcurrent maximumConcurrent 
+        testMode
+        appProfile
+        duration
+        stepdurationApplication
+        dataType
+        testType
+        aging
+        retries
+        retry_quanta 
+        resetConnectionsBetweenTests
+        steadyBehavior
+    } $option] != -1} {
+      $control setAttribute $option $value
+    } elseif {[lsearch {
+  	    stepRate.type stepRate.num
+  	    srcPortDist.min srcPortDist.max
+        dstPortDist.min dstPortDist.max
+    } $option] != -1} {
+  		lassign [split $option .] struct attr
+  		set node [$control selectNodes $struct]
+      $node setAttribute $attr $value
+    } else {
+      error "Unknown option $option"
+    }
+  }
+  $root appendChild $croot
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+
+  return
+}
+
+package provide bps::SessionLabClient 0.1

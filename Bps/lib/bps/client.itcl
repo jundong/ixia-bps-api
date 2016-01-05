@@ -1,0 +1,145 @@
+itcl::class bps::Client {
+  constructor {bpsobj context args} {}
+  destructor {}
+
+  protected variable _bpsobj
+  protected variable _context
+  protected variable _default
+
+  public method configure {args}
+  public method cget {option}
+
+  protected method _orig_configure @itcl-builtin-configure
+  protected method _orig_cget @itcl-builtin-cget
+
+  protected method _get_option_value_default {option}
+
+  protected method _heirarchical {basis args}
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+
+  protected method _describeStruct {xmlnode prefix}
+  protected method _optlist {xmlnode prefix}
+  protected method _createCommand {docvar rootvar command}
+}
+
+itcl::body bps::Client::constructor {bpsobj context args} {
+  set _bpsobj $bpsobj
+  set _context $context
+}
+
+itcl::body bps::Client::configure {args} {
+  if {[llength $args] == 0} {
+    set ret {}
+    foreach option [lsort [array names _default]] {
+      lappend ret [_get_option_value_default $option]
+    }
+    return $ret
+  } elseif {[llength $args] == 1} {
+    set option [lindex $args 0]
+    if {![string match -?* $option]} {
+      error "invalid format, must be -option"
+    }
+    set option [string range $option 1 end]
+    return [_get_option_value_default $option]
+  }
+  eval _doConfigChange $args 
+}
+
+itcl::body bps::Client::cget {option} {
+  if {![string match -?* $option]} {
+    error "invalid format, must be -option"
+  }
+  set option [string range $option 1 end]
+  _cget $option
+}
+
+itcl::body bps::Client::_get_option_value_default {option} {
+  return [list -$option $_default($option) [cget -$option] ]
+}
+
+itcl::body bps::Client::_heirarchical {basis args} {
+  foreach {key val} $args {
+    if {![string match -?* $key]} {
+      error "invalid arguments, must be -option value pairs"
+    }
+    set key [string range $key 1 end]
+    set path {}
+    foreach level [split $key .] {
+       lappend path $level
+        if {![eval [list dict exists $basis] $path]} {
+          eval dict set basis $path [list {}]
+        }
+    }
+    eval dict set basis $path [list $val]
+  }
+  return $basis
+}
+
+itcl::body bps::Client::_describeStruct {xmlnode prefix} {
+  if {$xmlnode == ""} {
+  	  return {}
+  }
+  if {$prefix != ""} {
+    set prefix ${prefix}.
+  }
+  set ret {}
+  foreach node [$xmlnode selectNodes child::*] {
+    set name [$node @id [$node @name ""]]
+    switch [$node nodeName] {
+      struct {
+        eval lappend ret [_describeStruct [$node selectNodes members] $prefix$name]
+      }
+      label -
+      description {
+      }
+      default {
+        lappend ret -$prefix[$node @id [$node @name ""]] [$node @default ""]
+      }
+    }
+  }
+  return $ret
+}
+
+itcl::body bps::Client::_optlist {xmlnode prefix} {
+  if {$xmlnode == ""} {
+  	  return {}
+  }
+  if {$prefix != ""} {
+    set prefix ${prefix}.
+  }
+  set ret {}
+  foreach node [$xmlnode selectNodes child::*] {
+    set name [$node @id [$node @name ""]]
+    switch [$node nodeName] {
+      struct {
+        eval lappend ret [_optlist [$node selectNodes members] $prefix$name]
+      }
+      label -
+      description {
+      }
+      default {
+        set desc [$node selectNodes description/child::node()]
+        if {$desc != ""} {
+            set desc [$desc asText]
+        }
+        lappend ret [list $prefix[$node @id [$node @name ""]].arg \
+                          [$node @default ""] \
+                          $desc]
+      }
+    }
+  }
+  return $ret
+}
+
+itcl::body bps::Client::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+  if {$_context != ""} {
+      $root setAttribute instance $_context
+  }
+}
+
+package provide bps::Client 0.1

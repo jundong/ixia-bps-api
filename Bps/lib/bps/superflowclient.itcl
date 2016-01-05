@@ -1,0 +1,1036 @@
+itcl::class bps::SuperflowClient {
+  inherit bps::Client
+
+  constructor {bpsobj template args} {
+    Client::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _construction 0
+  protected variable _xmldoc
+  protected variable _xmlroot
+  protected variable _counter 0
+
+  public method getHosts {}
+  public method addHost {name iface dnsname}
+  public method modifyHost {name args}
+  public method removeHost {name}
+
+  public method getFlows {}
+  public method addFlow {protocol from to args}
+  public method modifyFlow {flowid args}
+  public method removeFlow {flowid}
+  public method getFlowParameters {flowid}
+  public method unsetFlowParameter {flowid args}
+
+  public method getActionChoices {flowid}
+
+  public method getActions {args}
+  public method addAction {flowid source name args}
+  public method modifyAction {actionid args}
+  public method removeAction {actionid}
+  public method getActionParameters {actionid}
+  public method unsetActionParameter {actionid args}
+
+  public method getMatchActions {actionid match}
+  public method addMatchAction {actionid match flowid source name args}
+  public method modifyMatchAction {actionid match subid args}
+  public method removeMatchAction {actionid match subid}
+  public method getMatchActionParameters {actionid match subid}
+  public method unsetMatchActionParameter {actionid match subid args}
+
+  public method save {args}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+  protected method _updateXML {args}
+  protected method _createCommand {docvar rootvar command}
+  protected method _makeChange {domdoc}
+  protected method _getFlowParamObj {protocol flowid}
+  protected method _getActionParamObj {actionid flowid source actiontype}
+  protected method _validateActionArgs {cmdroot paramdoc paramroot mbnode gotonode actionid flowid source actiontype args}
+}
+
+itcl::body bps::SuperflowClient::constructor {
+	  bpsobj template args} {
+  _createCommand doc root setWorkingSuperFlow
+  if {[string compare $template ""] != 0} {
+    $root setAttribute template $template
+  }
+
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  set _construction 1
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+
+  set name [namespace tail $this]
+  $_bpsobj _exec [list workingSuperFlowModify -instance $_context \
+                     -name $name]
+  array set _default [list name $name]
+
+  configure -name $name
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  set _construction 2
+  return
+}
+
+itcl::body bps::SuperflowClient::destructor {} {
+  if {$_construction >= 1} {
+    catch {$_bpsobj _exec "workingSuperFlowForget -instance $_context"}
+  }
+}
+
+itcl::body bps::SuperflowClient::getHosts {} {
+  set ret {}
+  foreach item [$_xmlroot selectNodes hosts/host] {
+    set iface [$item selectNodes {param[@id='iface']/child::node()}]
+    if {$iface != ""} {
+        set iface [$iface asXML]
+    }
+    set dnsname [$item selectNodes {param[@id='hostname']/child::node()}] 
+    if {$dnsname != ""} {
+        set dnsname [$dnsname asXML]
+    }
+    lappend ret [$item @id] [list iface $iface dnsname $dnsname]
+  }
+  return $ret
+}
+
+itcl::body bps::SuperflowClient::addHost {name iface dnsname} {
+  _createCommand doc root workingSuperFlowAddHost 
+  $root setAttribute name $name
+  $root setAttribute iface $iface
+  $root setAttribute hostname $dnsname
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::SuperflowClient::modifyHost {name args} {
+  set optlist {
+      {iface.arg \0 "host interface"}
+      {dnsname.arg \0 "DNS hostname"}
+  }
+  array set opts [cmdline::getoptions args $optlist "modifyHost options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "modifyHost options:"]
+  }
+  _createCommand doc root workingSuperFlowModifyHost 
+  $root setAttribute name $name
+
+  if {$opts(iface) != "\0"} {
+  		$root setAttribute iface $opts(iface)
+  }
+  if {$opts(dnsname) != "\0"} {
+  		$root setAttribute hostname $opts(dnsname)
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::SuperflowClient::removeHost {name} {
+  _createCommand doc root workingSuperFlowRemoveHost
+  $root setAttribute name $name
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::SuperflowClient::getFlows {} {
+  set ret {}
+  foreach item [$_xmlroot selectNodes flows/flow] {
+    set info [list protocol [$item @name]]
+    lappend info from [$item @from]
+    lappend info to [$item @to]
+    foreach param [$item selectNodes param|hostref] {
+      set content [$param selectNodes child::node()]
+      if {$content != ""} {
+        lappend info [$param @id] [$content asXML]
+      } else {
+        lappend info [$param @id] {}
+      }
+    }
+    lappend ret [$item @id] $info
+  }
+  return $ret
+}
+
+itcl::body bps::SuperflowClient::addFlow {protocol from to args} {
+  set paramtype [_getFlowParamObj $protocol {}]
+  try {
+    set vals {}
+    foreach {key value} $args {
+      if {![string match -* $key]} {
+        error "Invalid option $key"
+      }
+      lappend vals [string range $key 1 end] $value
+    }
+    set param [$paramtype #auto -value $vals]
+    dom parse [$param paramSpec flow] paramdoc
+    $paramdoc documentElement paramroot
+  } finally {
+    if {[info exists param]} {
+      itcl::delete object $param
+    }
+    namespace delete [namespace qualifiers $paramtype]
+  }
+  _createCommand doc root workingSuperFlowAddFlow 
+  $root setAttribute name $protocol
+  $root setAttribute from $from
+  $root setAttribute to $to
+  foreach setting [$paramroot selectNodes child::node()] {
+    $root appendChild $setting
+  }
+  set ret [_makeChange $doc]
+  dom parse $ret doc
+  $doc documentElement root
+  return [$root @id]
+}
+
+itcl::body bps::SuperflowClient::modifyFlow {flowid args} {
+  _createCommand doc root workingSuperFlowModifyFlow
+  $root setAttribute id $flowid
+
+  set vals {}
+  foreach {key value} $args {
+    if {![string match -* $key]} {
+      error "Invalid option $key"
+    }
+    switch -- $key {
+      -from -
+      -to {
+        $root setAttribute [string range $key 1 end] $value
+      }
+      default {
+        if {![string match -* $key]} {
+          error "Invalid option $key"
+        }
+        lappend vals [string range $key 1 end] $value
+      }
+    }
+  }
+  set paramtype [_getFlowParamObj {} $flowid]
+  try {
+    set param [$paramtype #auto -value $vals]
+    dom parse [$param paramSpec flow] paramdoc
+    $paramdoc documentElement paramroot
+  } finally {
+    if {[info exists param]} {
+      itcl::delete object $param
+    }
+    namespace delete [namespace qualifiers $paramtype]
+  }
+
+  foreach setting [$paramroot selectNodes child::node()] {
+    $root appendChild $setting
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::SuperflowClient::removeFlow {flowid} {
+  _createCommand doc root workingSuperFlowRemoveFlow
+  $root setAttribute id $flowid
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::SuperflowClient::getFlowParameters {flowid} {
+  _createCommand doc root workingSuperFlowGetFlowInfo
+  $root setAttribute id $flowid
+  $root setAttribute brief true
+  set desc [$_bpsobj _execXml [$doc asXML]]
+  dom parse $desc doc
+  $doc documentElement root
+  return [_describeStruct [$root selectNodes settings] {}]
+}
+
+itcl::body bps::SuperflowClient::unsetFlowParameter {flowid args} {
+  _createCommand doc root workingSuperFlowModifyFlow
+  $root setAttribute id $flowid
+
+  $root appendFromScript {
+    foreach key $args {
+      if {![string match -* $key]} {
+        error "Invalid option $key"
+      }
+      domNode::param -id [string range $key 1 end] -delete true
+    }
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::SuperflowClient::getActionChoices {flowid} {
+  _createCommand doc root workingSuperFlowGetActionChoices
+  $root setAttribute id $flowid
+  dom parse [$_bpsobj _execXml [$doc asXML]] doc
+  $doc documentElement root
+  set ret {}
+  foreach item [$root selectNodes action] {
+    lappend ret [$item @source] [$item @id]
+  }
+  return $ret
+}
+
+itcl::body bps::SuperflowClient::getActions {args} {
+  set optlist {
+    {flowid.arg \0 "flow id"}
+  }
+  array set opts [cmdline::getoptions args $optlist "getActions options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "getActions options:"]
+  }
+  set ret {}
+  foreach item [$_xmlroot selectNodes actions/action] {
+    if {$opts(flowid) == "\0" || [$item @flowid] == $opts(flowid)} {
+      set info [list source [$item @source] flowid [$item @flowid]]
+      lappend info type [$item @type]
+      foreach param [$item selectNodes params/*] {
+        set content [$param selectNodes child::node()]
+        if {$content != ""} {
+          lappend info [$param @id] [$content asXML]
+        } else {
+          lappend info [$param @id] {}
+        }
+      }
+      if {[$item @type] == "expect"} {
+      		set i 0
+      		foreach match [$item selectNodes matchBlock/match] {
+      				set pattern [$match selectNodes pattern/child::node()]
+      				if {$pattern != ""} {
+      						set pattern [$pattern asXML]
+      				}
+      				switch -exact [$match @regex false] {
+      						true {
+      								set mre true
+      								set mt regex
+      						}
+      						false {
+      								set mre false
+      								set mt simple
+      						}
+      						canned {
+      								set mre false
+      								set mt canned
+      						}
+      				}
+      				lappend info match[incr i] $pattern \
+      				             match${i}IsRE $mre \
+      				             match${i}Type $mt
+      		}
+      		set nomatch [$item selectNodes matchBlock/nomatch]
+      		set timeout ""
+      		if {$nomatch != ""} {
+      				set timeout [$nomatch @timeout ""]
+      		}
+      		lappend info nomatch.timeout $timeout
+      } elseif {[$item @type] == "goto"} {
+      		set gotoblock [$item selectNodes gotoBlock]
+      		if  {$gotoblock == ""} {
+      				lappend info actionId 1 loop 1
+      		} else {
+      		    lappend info actionId [$gotoblock @actionid] \
+      		             loop [$gotoblock @loop]
+      		}
+      }
+      lappend ret [$item @id] $info
+    }
+  }
+  return $ret
+}
+
+itcl::body bps::SuperflowClient::addAction {flowid source name args} {
+  _createCommand doc root workingSuperFlowAddAction 
+  set extraxml [eval [list _validateActionArgs $root paramdoc paramroot {} {} \
+                                    {} $flowid $source $name] $args]
+  $root setAttribute flowid $flowid
+  $root setAttribute source $source
+  $root setAttribute name $name
+  foreach setting [$paramroot selectNodes child::node()] {
+    $root appendChild $setting
+  }
+  if {$extraxml != ""} {$root appendXML $extraxml}
+  set ret [_makeChange $doc]
+  dom parse $ret doc
+  $doc documentElement root
+  return [$root @id]
+}
+
+itcl::body bps::SuperflowClient::modifyAction {actionid args} {
+  _createCommand doc root workingSuperFlowModifyAction
+  $root setAttribute id $actionid
+
+  set vals {}
+  set actionnode [$_xmlroot selectNodes actions/action\[$actionid\]]
+  if {$actionnode == ""} {
+  		error "Invalid action ID \"$actionid\""
+  }
+  set mbnode [$actionnode selectNodes matchBlock]
+  if {$mbnode != ""} {
+    dom parse [$mbnode asXML] mbdoc
+    $mbdoc documentElement mbnode
+  }
+  set gotonode [$actionnode selectNodes gotoBlock]
+  if {$gotonode != ""} {
+    dom parse [$gotonode asXML] gotodoc
+    $gotodoc documentElement gotonode
+  }
+  set extraxml [eval [list _validateActionArgs $root paramdoc paramroot $mbnode $gotonode \
+                                $actionid {} {} [$actionnode @type]] $args]
+  foreach setting [$paramroot selectNodes child::node()] {
+    $root appendChild $setting
+  }
+  if {$extraxml != ""} {$root appendXML $extraxml}
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::SuperflowClient::removeAction {actionid} {
+  _createCommand doc root workingSuperFlowRemoveAction
+  $root setAttribute id $actionid
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::SuperflowClient::getActionParameters {actionid} {
+  _createCommand doc root workingSuperFlowGetActionInfo
+  $root setAttribute id $actionid
+  set desc [$_bpsobj _execXml [$doc asXML]]
+  dom parse $desc doc
+  $doc documentElement root
+  set ret [_describeStruct [$root selectNodes settings] {}]
+  if {[$root @id ""] == "expect"} {
+  		lappend ret -match1 {} -match1IsRE false -match1Type simple \
+  		            -match2 {} -match2IsRE false -match2Type simple \
+  		            -match3 {} -match3IsRE false -match3Type simple \
+  		            -nomatch.timeout {}
+  }
+  if {[$root @id ""] == "goto"} {
+  		lappend ret -actionId 1 -loop 1
+  }
+  return $ret
+}
+
+itcl::body bps::SuperflowClient::unsetActionParameter {actionid args} {
+  _createCommand doc root workingSuperFlowModifyAction
+  $root setAttribute id $actionid
+  $root appendFromScript {
+    foreach key $args {
+      if {![string match -* $key]} {
+        error "Invalid option $key"
+      }
+      domNode::param -id [string range $key 1 end] -delete true
+    }
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::SuperflowClient::getMatchActions {actionid match} {
+	if {![string is integer -strict $actionid]} {
+			error "Invalid actionid \"$actionid\""
+	}
+	if {![string is integer $match] && $match != "none"} {
+		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+	}
+  set ret {}
+  set i 0
+  if {$match == "" || $match == "none"} {
+  		set items [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/nomatch/action]
+  } else {
+  		set items [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/match\[$match\]/action]
+  }
+  foreach item $items {
+    set info [list source [$item @source]]
+    lappend info type [$item @type]
+    foreach param [$item selectNodes params/*] {
+      set content [$param selectNodes child::node()]
+      if {$content != ""} {
+        lappend info [$param @id] [$content asXML]
+      } else {
+        lappend info [$param @id] {}
+      }
+    }
+    lappend ret [incr i] $info
+  }
+  return $ret
+}
+
+itcl::body bps::SuperflowClient::addMatchAction {actionid match flowid source name args} {
+	if {![string is integer -strict $actionid]} {
+			error "Invalid actionid \"$actionid\""
+	}
+	if {![string is integer $match] && $match != "none"} {
+		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+	}
+  if {$match == "" || $match == "none"} {
+      set matchnode [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/nomatch]
+  } else {
+      set matchnode [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/match\[$match\]]
+      if {$matchnode == ""} {
+  		    error "Invalid match specifier \"$actionid $match\""
+      }
+  }
+  _createCommand doc root workingSuperFlowModifyAction
+  set extraxml [eval [list _validateActionArgs $root paramdoc paramroot {} {} \
+                                    {} $flowid $source $name] $args]
+  $root setAttribute id $actionid
+
+  if {$matchnode != ""} {
+      set originalmb [$matchnode selectNodes parent::node()]
+  } else {
+  		set originalmb [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock]
+  		if {$originalmb == ""} {
+  				dom createDocument matchBlock originalmbdoc
+  				$originalmbdoc documentElement originalmb
+  		}
+  		$originalmb appendFromScript {
+  				domNode::nomatch
+  		}
+  }
+  $root appendXML [$originalmb asXML]
+  if {$match == "" || $match == "none"} {
+      set mbnode [$root selectNodes matchBlock/nomatch]
+  } else {
+      set mbnode [$root selectNodes matchBlock/match\[$match\]]
+  }
+  $mbnode appendFromScript {
+  		domNode::action -flowid $flowid -source $source -type $name {
+  				domNode::params
+  		}
+  }
+  set actions [$mbnode selectNodes action]
+  set anode [[lindex $actions end] selectNodes params]
+  foreach setting [$paramroot selectNodes child::node()] {
+    $anode appendChild $setting
+  }
+  if {$extraxml != ""} {[lindex $actions end] appendXML $extraxml}
+  set ret [_makeChange $doc]
+  return [llength $actions]
+}
+
+itcl::body bps::SuperflowClient::modifyMatchAction {actionid match subid args} {
+	if {![string is integer -strict $actionid]} {
+			error "Invalid actionid \"$actionid\""
+	}
+	if {![string is integer $match] && $match != "none"} {
+		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+	}
+	if {![string is integer -strict $subid]} {
+			error "Invalid actionid \"$subid\""
+	}
+  if {$match == "" || $match == "none"} {
+      set matchnode [$_xmlroot selectNodes actions/action\[$actionid\]/matchBlock/nomatch]
+  } else {
+      set matchnode [$_xmlroot selectNodes actions/action\[$actionid\]/matchBlock/match\[$match\]]
+  }
+  if {$matchnode == ""} {
+  		error "Invalid match specifier \"$actionid $match\""
+  }
+  set actionnode [$matchnode selectNodes action\[$subid\]]
+  if {$actionnode == ""} {
+  		error "Invalid action specifier \"$actionid $match $subid\""
+  }
+  set mbnode [$actionnode selectNodes matchBlock]
+  if {$mbnode != ""} {
+    dom parse [$mbnode asXML] mbdoc
+    $mbdoc documentElement mbnode
+  }
+  set gotonode [$actionnode selectNodes gotoBlock]
+  if {$gotonode != ""} {
+    dom parse [$gotonode asXML] gotodoc
+    $gotodoc documentElement gotonode
+  }
+  _createCommand doc root workingSuperFlowModifyAction
+  set extraxml [eval [list _validateActionArgs $root paramdoc paramroot $mbnode $gotonode \
+                                {} [$actionnode @flowid] \
+                                   [$actionnode @source] \
+                                   [$actionnode @type]] $args]
+
+  $root setAttribute id $actionid
+
+  set originalmb [$matchnode selectNodes parent::node()]
+  $root appendXML [$originalmb asXML]
+  if {$match == "" || $match == "none"} {
+      set mbnode [$root selectNodes matchBlock/nomatch]
+  } else {
+      set mbnode [$root selectNodes matchBlock/match\[$match\]]
+  }
+
+  set actionnode [$mbnode selectNodes action\[$subid\]]
+  if {$actionnode == ""} {
+  		error "Invalid action specifier \"$actionid $match $subid\""
+  }
+  set paramsnode [$actionnode selectNodes params]
+  if {$paramsnode != ""} {
+  		$actionnode removeChild $paramsnode
+  }
+  $actionnode appendFromScript {
+  		domNode::params
+  }
+  set anode [$actionnode selectNodes params]
+  foreach setting [$paramroot selectNodes child::node()] {
+    $anode appendChild $setting
+  }
+  if {$extraxml != ""} {$actionnode appendXML $extraxml}
+  set ret [_makeChange $doc]
+  return
+}
+
+itcl::body bps::SuperflowClient::removeMatchAction {actionid match subid} {
+	if {![string is integer -strict $actionid]} {
+			error "Invalid actionid \"$actionid\""
+	}
+	if {![string is integer $match] && $match != "none"} {
+		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+	}
+	if {![string is integer -strict $subid]} {
+			error "Invalid actionid \"$subid\""
+	}
+  if {$match == "" || $match == "none"} {
+      set matchnode [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/nomatch]
+  } else {
+      set matchnode [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/match\[$match\]]
+  }
+  if {$matchnode == ""} {
+  		error "Invalid match specifier \"$actionid $match\""
+  }
+  _createCommand doc root workingSuperFlowModifyAction
+  $root setAttribute id $actionid
+
+  set originalmb [$matchnode selectNodes parent::node()]
+  $root appendXML [$originalmb asXML]
+  if {$match == "" || $match == "none"} {
+      set matchnode [$root selectNodes matchBlock/nomatch]
+  } else {
+      set matchnode [$root selectNodes matchBlock/match\[$match\]]
+  }
+
+  set actionnode [$matchnode selectNodes action\[$subid\]]
+  if {$actionnode == ""} {
+  		error "Invalid action specifier \"$actionid $match $subid\""
+  }
+  $matchnode removeChild $actionnode
+  set ret [_makeChange $doc]
+  return
+}
+
+itcl::body bps::SuperflowClient::getMatchActionParameters {actionid match subid} {
+	if {![string is integer -strict $actionid]} {
+			error "Invalid actionid \"$actionid\""
+	}
+	if {![string is integer $match] && $match != "none"} {
+		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+	}
+	if {![string is integer -strict $subid]} {
+			error "Invalid actionid \"$subid\""
+	}
+  if {$match == "" || $match == "none"} {
+      set matchnode [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/nomatch]
+  } else {
+      set matchnode [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/match\[$match\]]
+  }
+  if {$matchnode == ""} {
+  		error "Invalid match specifier \"$actionid $match\""
+  }
+  set actionnode [$matchnode selectNodes action\[$subid\]]
+  if {$actionnode == ""} {
+  		error "Invalid action specifier \"$actionid $match $subid\""
+  }
+  _createCommand doc root getActionInFlowInfo
+  $root setAttribute actionType [$actionnode @type]
+  $root setAttribute flowid [$actionnode @flowid]
+  $root setAttribute source [$actionnode @source]
+  set desc [$_bpsobj _execXml [$doc asXML]]
+  dom parse $desc doc
+  $doc documentElement root
+  set ret [_describeStruct [$root selectNodes settings] {}]
+  if {[$root @id ""] == "expect"} {
+  		lappend ret -match1 {} -match1IsRE false -match1Type simple \
+  		            -match2 {} -match2IsRE false -match2Type simple \
+  		            -match3 {} -match3IsRE false -match3Type simple \
+  		            -nomatch.timeout {}
+  }
+  if {[$root @id ""] == "goto"} {
+  		lappend ret -actionId 1 -loop 2
+  }
+  return $ret
+}
+
+itcl::body bps::SuperflowClient::unsetMatchActionParameter {actionid match subid args} {
+	if {![string is integer -strict $actionid]} {
+			error "Invalid actionid \"$actionid\""
+	}
+	if {![string is integer $match] && $match != "none"} {
+		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+	}
+	if {![string is integer -strict $subid]} {
+			error "Invalid actionid \"$subid\""
+	}
+  if {$match == "" || $match == "none"} {
+      set matchnode [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/nomatch]
+  } else {
+      set matchnode [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/match\[$match\]]
+  }
+  if {$matchnode == ""} {
+  		error "Invalid match specifier \"$actionid $match\""
+  }
+  set actionnode [$matchnode selectNodes action\[$subid\]]
+  if {$actionnode == ""} {
+  		error "Invalid action specifier \"$actionid $match $subid\""
+  }
+  _createCommand doc root workingSuperFlowModifyAction
+  $root setAttribute id $actionid
+
+  set originalmb [$matchnode selectNodes parent::node()]
+  $root appendXML [$originalmb asXML]
+  if {$match == "" || $match == "none"} {
+      set mbnode [$root selectNodes matchBlock/nomatch]
+  } else {
+      set mbnode [$root selectNodes matchBlock/match\[$match\]]
+  }
+
+  set actionnode [$mbnode selectNodes action\[$subid\]]
+  if {$actionnode == ""} {
+  		error "Invalid action specifier \"$actionid $match $subid\""
+  }
+  foreach key $args {
+      if {![string match -* $key]} {
+        error "Invalid option $key"
+      }
+      set deadmeat [$actionnode selectNodes \
+                params/param\[@id='[string range $key 1 end]'\]]
+      if {$deadmeat == ""} {
+      		error "Parameter \"$key\" not found"
+      }
+  		[$deadmeat selectNodes parent::node()] removeChild $deadmeat
+  }
+  set ret [_makeChange $doc]
+  return
+}
+
+itcl::body bps::SuperflowClient::save {args} {
+  set optlist {
+      {name.arg {} "saved superflow name"}
+      {force false "overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+  _createCommand doc root workingSuperFlowSave
+  if {$opts(force)} {
+  		set opts(force) "true"
+  } else {
+  		set opts(force) "false"
+  }
+  foreach attr {name force} {
+    $root setAttribute $attr $opts($attr)
+  }
+  _makeChange $doc
+}
+
+itcl::body bps::SuperflowClient::_cget {option} {
+  switch -exact -- $option {
+    name {return [$_xmlroot @name]}
+  }
+  error "Unknown option $option"
+}
+
+itcl::body bps::SuperflowClient::_doConfigChange {args} {
+  foreach {option value} $args {
+    switch -exact -- $option {
+      -name {
+        _createCommand doc root workingSuperFlowModify 
+        $root setAttribute name $value
+        _makeChange $doc
+      }
+      default {
+        error "Unknown option $option"
+      }
+    }
+  }
+  return
+}
+
+itcl::body bps::SuperflowClient::_updateXML {} {
+  set ret [$_bpsobj _exec [list getWorkingSuperFlow -instance $_context]]
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+  return
+}
+
+itcl::body bps::SuperflowClient::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+}
+
+itcl::body bps::SuperflowClient::_makeChange {domdoc} {
+  set ret [$_bpsobj _execXml [$domdoc asXML]]
+  _updateXML
+  return $ret
+}
+
+itcl::body bps::SuperflowClient::_getFlowParamObj {protocol flowid} {
+  if {$protocol != ""} {
+    dom createDocument cannedFlowInfo doc
+    $doc documentElement root
+    $root setAttribute name $protocol
+  } else {
+    _createCommand doc root workingSuperFlowGetFlowInfo
+    $root setAttribute id $flowid
+    $root setAttribute brief true
+  }
+  set desc [$_bpsobj _execXml [$doc asXML]]
+  dom parse $desc doc
+  $doc documentElement root
+  set namespace [namespace current]::s[incr _counter]
+
+  set memberlist [model::processTypeDeclarationList $namespace [$root selectNodes settings]]
+  set constraintlist {}
+  return [model::defineStruct $namespace params \
+                                         $memberlist \
+                                         $constraintlist]
+}
+
+itcl::body bps::SuperflowClient::_getActionParamObj {
+               actionid flowid source actiontype} {
+  if {$actionid == ""} {
+    set flownode [$_xmlroot selectNodes "flows/flow\[@id='$flowid'\]"]
+    if {[llength $flownode] != 1} {
+      error "Invalid flow ID $flowid"
+    }
+    dom createDocument cannedFlowInfo doc
+    $doc documentElement root
+    $root setAttribute name [$flownode @name]
+    $root setAttribute brief false
+  } else {
+    _createCommand doc root workingSuperFlowGetActionInfo
+    $root setAttribute id $actionid
+  }
+  set desc [$_bpsobj _execXml [$doc asXML]]
+  dom parse $desc doc
+  $doc documentElement root
+  set namespace [namespace current]::s[incr _counter]
+  set actionnode $root
+
+  if {$actionid == ""} {
+    set actionnode [$root selectNodes \
+       "actions/action\[@source='$source' and @id='$actiontype'\]"]
+    if {[llength $actionnode] != 1} {
+      error "Invalid action type $source $actiontype for flowid $flowid"
+    }
+  }
+  set memberlist [model::processTypeDeclarationList \
+                     $namespace [$actionnode selectNodes settings]]
+  set constraintlist {}
+  return [model::defineStruct $namespace params \
+                                         $memberlist \
+                                         $constraintlist]
+}
+
+itcl::body bps::SuperflowClient::_validateActionArgs {cmdroot
+               paramdocvar paramrootvar mbnode gotonode actionid flowid source actiontype args} {
+  upvar $paramdocvar paramdoc
+  upvar $paramrootvar paramroot
+  set vals {}
+  foreach {key value} $args {
+    if {![string match -* $key]} {
+      error "Invalid option $key"
+    }
+    switch -- $key {
+      -newid {
+        $cmdroot setAttribute [string range $key 1 end] $value
+      }
+      -nomatch.timeout {
+      		if {$actiontype != "expect"} {
+      			# dont do anything special
+            if {![string match -* $key]} {
+              error "Invalid option $key"
+            }
+            lappend vals [string range $key 1 end] $value
+      		} else {
+    				  if {$mbnode == ""} {
+    						dom createDocument matchBlock mbdoc
+    						$mbdoc documentElement mbnode
+     				  }
+     				  if {[llength [$mbnode selectNodes nomatch]] < 1} {
+     						$mbnode appendFromScript {
+     								domNode::nomatch
+     						}
+     					}
+     					set matchnode [$mbnode selectNodes nomatch]
+     					$matchnode setAttribute timeout $value
+     			}
+      }
+      -match1IsRE -
+      -match2IsRE -
+      -match3IsRE {
+      		if {$actiontype != "expect"} {
+      			# dont do anything special
+            if {![string match -* $key]} {
+              error "Invalid option $key"
+            }
+            lappend vals [string range $key 1 end] $value
+      		} else {
+      				if {![string is boolean -strict $value]} {
+      						error "Invalid value for isRE, must be true or false"
+      				}
+    				  if {$mbnode == ""} {
+    						dom createDocument matchBlock mbdoc
+    						$mbdoc documentElement mbnode
+     				  }
+     				  while {[llength [$mbnode selectNodes match]] < 3} {
+     						$mbnode appendFromScript {
+     								domNode::match {
+     										domNode::pattern
+     								}
+     						}
+     					}
+      				set mindex [string range $key 6 6]
+      				set matchnode [$mbnode selectNodes match\[$mindex\]]
+      				$matchnode setAttribute regex $value
+      		}
+      }
+      -match1Type -
+      -match2Type -
+      -match3Type {
+      		if {$actiontype != "expect"} {
+      			# dont do anything special
+            if {![string match -* $key]} {
+              error "Invalid option $key"
+            }
+            lappend vals [string range $key 1 end] $value
+      		} else {
+    				  if {$mbnode == ""} {
+    						dom createDocument matchBlock mbdoc
+    						$mbdoc documentElement mbnode
+     				  }
+     				  while {[llength [$mbnode selectNodes match]] < 3} {
+     						$mbnode appendFromScript {
+     								domNode::match {
+     										domNode::pattern
+     								}
+     						}
+     					}
+      				set mindex [string range $key 6 6]
+      				set matchnode [$mbnode selectNodes match\[$mindex\]]
+      				switch -exact $value {
+      						simple {
+      								set val false
+      						}
+      						regex {
+      								set val true
+      						}
+      						canned {
+      								set val canned
+      						}
+      						default {
+      								error "Invalid match type $value, must be one of: simple, regex, canned"
+      						}
+      				}
+      				$matchnode setAttribute regex $val
+      		}
+      }
+      -match1 -
+      -match2 -
+      -match3 {
+      		if {$actiontype != "expect"} {
+      			# dont do anything special
+            if {![string match -* $key]} {
+              error "Invalid option $key"
+            }
+            lappend vals [string range $key 1 end] $value
+      		} else {
+    				  if {$mbnode == ""} {
+    						dom createDocument matchBlock mbdoc
+    						$mbdoc documentElement mbnode
+     				  }
+     				  while {[llength [$mbnode selectNodes match]] < 3} {
+     						$mbnode appendFromScript {
+     								domNode::match {
+     										domNode::pattern
+     								}
+     						}
+     					}
+      				set mindex [string range $key 6 end]
+      				set matchnode [$mbnode selectNodes match\[$mindex\]]
+      				set pattern [$matchnode selectNodes pattern]
+      				if {$pattern == ""} {
+      						$matchnode appendFromScript {
+      								domNode::pattern
+      						}
+      				}
+      				set pattern [$matchnode selectNodes pattern]
+      				foreach child [$pattern childNodes] {
+      						$pattern removeChild $child
+      				}
+      				$pattern appendFromScript {
+      						domNode::text $value
+      				}
+      		}
+      }
+    	-actionId {
+    		if {$actiontype != "goto"} {
+    			# dont do anything special
+          if {![string match -* $key]} {
+            error "Invalid option $key"
+          }
+          lappend vals [string range $key 1 end] $value
+    		} else {
+  				  if {$gotonode == ""} {
+  						dom createDocument gotoBlock gotodoc
+  						$gotodoc documentElement gotonode
+   				  }
+   				  $gotonode setAttribute actionid $value
+    		}
+    	}
+    	-loop {
+    		if {$actiontype != "goto"} {
+    			# dont do anything special
+          if {![string match -* $key]} {
+            error "Invalid option $key"
+          }
+          lappend vals [string range $key 1 end] $value
+    		} else {
+  				  if {$gotonode == ""} {
+  						dom createDocument gotoBlock gotodoc
+  						$gotodoc documentElement gotonode
+   				  }
+   				  $gotonode setAttribute loop $value
+    		}
+      	}
+      default {
+        if {![string match -* $key]} {
+          error "Invalid option $key"
+        }
+        lappend vals [string range $key 1 end] $value
+      }
+    }
+  }
+  set paramtype [_getActionParamObj $actionid $flowid $source $actiontype]
+  try {
+    set param [$paramtype #auto -value $vals]
+    dom parse [$param paramSpec flow] paramdoc
+    $paramdoc documentElement paramroot
+  } finally {
+    if {[info exists param]} {
+      itcl::delete object $param
+    }
+    namespace delete [namespace qualifiers $paramtype]
+  }
+  if {$mbnode != ""} {
+  		return [$mbnode asXML]
+  }
+  if {$gotonode != ""} {
+  		return [$gotonode asXML]
+  }
+  return
+}
+
+package provide bps::SuperflowClient 0.1

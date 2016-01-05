@@ -1,0 +1,386 @@
+itcl::class bps::MulticastClient {
+  inherit bps::LabClient
+  lappend bps::LabClient::_subclasses ::bps::MulticastClient
+
+  constructor {bpsobj template args} {
+    LabClient::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  public method save {args}
+
+  public method getComponents {}
+
+  public method networkTypes {}
+
+  public method getSources {}
+  public method addSource {args}
+  public method removeSource {index}
+
+  public method getSubscribers {}
+  public method addSubscribers {args}
+  public method removeSubscribers {index}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+}
+
+#<multicastLab duration="00:00:30">
+#<source ipAddress="10.1.1.2" multicastAddress="224.0.0.1" rate="100" />
+#<source ipAddress="10.1.1.3" multicastAddress="224.0.0.1" rate="1000" />
+#<source ipAddress="10.2.1.2" multicastAddress="225.0.0.1" rate="10000" />
+#<network>
+#  <networkType name="medium">
+#      <label><msg>Medium Network</msg></label>
+#      <description><msg>Subscriber IPs range from 10.10.2.1 - 10.10.18.254.  Up to 256 simultaneous subscriber subnets will be used using a /28 netmask.</msg></description>
+#      <externalHelpUrl>http://127.0.0.1/mc_help_medium.html</externalHelpUrl>
+#      <netmask>28</netmask>
+#      <minNetwork>10.10.2.0</minNetwork>
+#      <maxNetwork>10.10.18.0</maxNetwork>
+#      <gateway>10.10.1.1</gateway>
+#      <vlans>256</vlans>
+#  </networkType>
+#</network>
+#<subscriber maxSubscribers="100" groupAddress="224.0.0.1" 
+#            sourceSpecific="true">
+#  <sourceIp>10.1.1.2</sourceIp>
+#  <sourceIp>10.1.1.3</sourceIp>
+#</subscriber>
+#<subscriber maxSubscribers="1000" groupAddress="225.0.0.1" 
+#            sourceSpecific="false">
+#</subscriber>
+#</multicastLab>
+
+
+itcl::body bps::MulticastClient::constructor {
+	  bpsobj template args} {
+  _setWorkingModel {Multicast Lab Default} \
+                   {Multicast Template} \
+                   $template
+  set control [$_xmlroot selectNodes //multicastLab]
+  array set _default {}
+  foreach attr {
+    duration
+  } {
+  	set _default($attr) [$control @$attr ""]
+  }
+  foreach attr {name} {
+    set _default($attr) [$_xmlroot @$attr ""]
+  }
+
+  set net [$control selectNodes network/networkType]
+  if {$net != ""} {
+    set net [$net @name]
+  }
+  set _default(networkType) $net
+  foreach {struct attr} {
+  } {
+  		set node [$control selectNodes $struct]
+  		set _default($struct.$attr) [$node @$attr ""]
+  }
+  set attrlist {
+  }
+  for {set tnum 1} {$tnum <= 3} {incr tnum} {
+    set node [$control selectNodes target\[$tnum\]]
+    if {$node != ""} {
+        foreach attr $attrlist {
+  		    set _default(target$tnum.$attr) [$node @$attr ""]
+  	    }
+  	} else {
+  	    foreach attr $attrlist {
+  	        set _default(target$tnum.$attr) ""
+  	    }
+  	}
+  }
+
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::MulticastClient::destructor {} {
+}
+
+itcl::body bps::MulticastClient::save {args} {
+  eval [list _saveNamed {Multicast Template} -name [$_xmlroot @name]] $args
+}
+
+itcl::body bps::MulticastClient::getComponents {} {
+  foreach comp [$_xmlroot selectNodes component] {
+    # determine preset type
+    _createCommand doc root workingModelGetPreset
+    $root setAttribute component [$comp @id]
+    set ret [$_bpsobj _execXml [$doc asXML]]
+    dom parse $ret doc
+    $doc documentElement root
+    if {[info exists _componentObjs([$comp @id])]} continue
+    set preset [$root @preset]
+    if {$preset == ""} {
+      switch [$comp @type] {
+        layer2 {
+          set preset bitblaster
+        }
+        layer3 {
+          set preset routingrobot
+        }
+        clientsim {
+          set preset clientsimpreset
+        }
+        layer4 {
+          set preset sessionsender
+        }
+        security_all {
+          set preset security
+        }
+        playback {
+          set preset recreate
+        }
+        default {
+          set preset [$comp @type]
+        }
+      }
+    }
+    # create an object for it
+    set temp [namespace which [bps::ComponentClient #auto \
+                         $_bpsobj $_context [namespace which $this] \
+                         $preset $preset [$comp @type] $comp]]
+    set _componentObjs([$temp id]) $temp
+  }
+  # one more time for aggstats
+  if {![info exists _componentObjs(aggstats)]} {
+      set compname aggstats
+      set type aggregate_statistics
+      set realname aggstats
+
+      set temp [namespace which [uplevel [list bps::ComponentClient #auto \
+                                               $_bpsobj $_context \
+                                           [namespace which $this] $compname \
+                            $realname $type {}]]]
+      set _componentObjs([$temp id]) $temp
+  }
+  return [array get _componentObjs]
+}
+
+
+itcl::body bps::MulticastClient::networkTypes {} {
+  dom createDocument multicastLabNetworkTypes doc
+  $doc documentElement root
+  set networks [$_bpsobj _execXml [$doc asXML]]
+  dom parse $networks doc
+  $doc documentElement root
+  set ret {}
+  foreach node [$root selectNodes entry] {
+    set label [$node selectNodes description/child::node()/child::node()]
+    if {$label != ""} {
+        set label [$label asText]
+    }
+    lappend ret [$node @name] $label
+  }
+  return $ret
+}
+
+itcl::body bps::MulticastClient::getSources {} {
+    set ret {}
+    set index 0
+    foreach node [$_xmlroot selectNodes multicastLab/source] {
+        lappend ret [incr index] [list \
+            ipAddress [$node @ipAddress ""] \
+            groupAddress [$node @multicastAddress ""] \
+            rate [$node @rate ""] ]
+    }
+    return $ret
+}
+
+itcl::body bps::MulticastClient::addSource {args} {
+  set optlist {
+      {ipAddress.arg {} "IP address for this source"}
+      {groupAddress.arg {} "Multicast group address for this source"}
+      {rate.arg 100 "Rate of transmission of this source in Mbps"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addSource options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addSource options:"]
+  }
+
+  _createCommand doc root workingModelModify
+  set oldcontrol [$_xmlroot selectNodes multicastLab]
+  dom parse [$oldcontrol asXML] cdoc
+  $cdoc documentElement croot
+
+  $croot appendFromScript {
+    domNode::source -ipAddress $opts(ipAddress) \
+                    -multicastAddress $opts(groupAddress) \
+                    -rate $opts(rate)
+  }
+  $root appendChild $croot
+  _makeChange $doc
+
+  return [llength [$_xmlroot selectNodes multicastLab/source]]
+}
+
+itcl::body bps::MulticastClient::removeSource {index} {
+  _createCommand doc root workingModelModify
+  set oldcontrol [$_xmlroot selectNodes multicastLab]
+  dom parse [$oldcontrol asXML] cdoc
+  $cdoc documentElement croot
+
+  set deadnode [$croot selectNodes source\[$index\]]
+  if {$deadnode == ""} {
+    error "Invalid index $index"
+  }
+  $croot removeChild $deadnode
+
+  # remove references from subscribers
+  set ip [$deadnode @ipAddress]
+  foreach refnode [$croot selectNodes \
+       subscriber/sourceIp\[child::node()='$ip'\] ] {
+    set parent [$refnode selectNodes parent::node()]
+    $parent removeChild $refnode
+  }
+
+  $root appendChild $croot
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::MulticastClient::getSubscribers {} {
+    set ret {}
+    set index 0
+    foreach node [$_xmlroot selectNodes multicastLab/subscriber] {
+        set sources {}
+        foreach sourcenode [$node selectNodes sourceIp/child::node()] {
+            lappend sources [$sourcenode asXML]
+        }
+        lappend ret [incr index] [list \
+            maxSubscribers [$node @maxSubscribers ""] \
+            groupAddress [$node @groupAddress ""] \
+            sourceSpecific [$node @sourceSpecific ""] \
+            sources $sources]
+    }
+    return $ret
+}
+
+itcl::body bps::MulticastClient::addSubscribers {args} {
+  set optlist {
+      {maxSubscribers.arg 4 "Maximum number of joined subscribers per subnet"}
+      {groupAddress.arg {} "Multicast group the subscribers will join"}
+      {sourceSpecific.arg false "Use source-specific multicast (SSM)"}
+      {sources.arg {} "List of sources for source-specific multicast (SSM)"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addSubscriber options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addSubscriber options:"]
+  }
+
+  _createCommand doc root workingModelModify
+  set oldcontrol [$_xmlroot selectNodes multicastLab]
+  dom parse [$oldcontrol asXML] cdoc
+  $cdoc documentElement croot
+
+  $croot appendFromScript {
+    domNode::subscriber -maxSubscribers $opts(maxSubscribers) \
+                        -groupAddress $opts(groupAddress) \
+                        -sourceSpecific $opts(sourceSpecific) {
+        foreach source $opts(sources) {
+            domNode::sourceIp {
+                domNode::text $source
+            }
+        }
+    }
+  }
+  $root appendChild $croot
+  _makeChange $doc
+
+  return [llength [$_xmlroot selectNodes multicastLab/subscriber]]
+}
+
+itcl::body bps::MulticastClient::removeSubscribers {index} {
+  _createCommand doc root workingModelModify
+  set oldcontrol [$_xmlroot selectNodes multicastLab]
+  dom parse [$oldcontrol asXML] cdoc
+  $cdoc documentElement croot
+
+  set deadnode [$croot selectNodes subscriber\[$index\]]
+  if {$deadnode == ""} {
+    error "Invalid index $index"
+  }
+  $croot removeChild $deadnode
+
+  $root appendChild $croot
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::MulticastClient::_cget {option} {
+  switch -exact -- $option {
+    name {
+        return [$_xmlroot @name ""]
+    }
+    duration {
+      set control [$_xmlroot selectNodes //multicastLab]
+  	  return [$control @$option ""]
+    }
+    networkType {
+      set ret [$_xmlroot selectNodes //multicastLab/network/networkType]
+      if {$ret != ""} {
+        set ret [$ret @name]
+        return $ret
+      }
+    }
+    default {
+      error "Unknown option $option"
+    }
+  }
+}
+
+itcl::body bps::MulticastClient::_doConfigChange {args} {
+  set oldcontrol [$_xmlroot selectNodes multicastLab]
+  dom parse [$oldcontrol asXML] cdoc
+  $cdoc documentElement croot
+
+  _createCommand doc root workingModelModify
+  foreach {option value} $args {
+    if {![string match -* $option]} {
+      error "Invalid option $option"
+    }
+    set option [string range $option 1 end]
+    if {[lsearch { name } $option] != -1} {
+        $root setAttribute $option $value
+    } elseif {[lsearch {
+        duration
+    } $option] != -1} {
+      $croot setAttribute $option $value
+    } elseif {[string compare "networkType" $option] == 0} {
+      set netnode [$croot selectNodes //multicastLab/network/networkType]
+
+      dom createDocument multicastLabNetworkTypes cmddoc
+      $cmddoc documentElement cmdroot
+      set networks [$_bpsobj _execXml [$cmddoc asXML]]
+      dom parse $networks fromdoc
+      $fromdoc documentElement fromroot
+
+      set newnode [$fromroot selectNodes entry\[@name='$value'\]]
+      if {$newnode == ""} {
+        error "Invalid networkType \"$value\""
+      }
+      $netnode setAttribute name $value
+      foreach child [$netnode childNodes] {
+        $netnode removeChild $child
+      }
+      foreach child [$newnode childNodes] {
+        $netnode appendChild $child
+      }
+    } else {
+      error "Unknown option $option"
+    }
+  }
+  $root appendChild $croot
+  $_bpsobj _execXml [$doc asXML]
+  _updateXML
+
+  return
+}
+
+package provide bps::MulticastClient 0.1

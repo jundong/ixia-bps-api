@@ -1,0 +1,186 @@
+package require Itcl
+package require log
+package require infostack
+package require ifexists
+
+namespace eval library {
+  set _async_instances {}
+  set _async_dump false
+
+  proc chain {args} {
+    global ::library::_async_instances
+    set chain [uplevel namespace which \
+                [uplevel ::library::AsyncChain #auto $args]]
+    lappend ::library::_async_instances $chain
+    return $chain
+  }
+}
+
+itcl::class library::AsyncChain {
+  public constructor {args} {}
+  public destructor {}
+
+  public variable stopOnError true
+  public variable errorcmd ::library::AsyncChain::logError
+  public variable timeout -1
+
+  public method append {args}
+
+  public method waitfor {cue}
+  public method gocmd {{cue {}}}
+  public method go {{cue {}}}
+
+  protected variable _cmdlist
+  protected variable _namespace
+  protected variable _index 0
+  protected variable _timer
+  protected variable _cues {}
+
+  protected method _go {}
+  protected method _handleError {err errorInfo errorCode}
+  protected method _timeout {args}
+  protected method _checkSystem {}
+  protected variable _sysTimer
+
+  public proc logError {err errorInfo errorCode}
+
+  protected method dump { description } 
+  protected method dumpstring { description } 
+  protected variable _dump 0
+}
+
+itcl::body library::AsyncChain::constructor {args} {
+  set count 0
+  foreach {opt val} $args {
+    if {[string match -nocase -* $opt]} {
+      configure $opt $val
+      incr count 2
+    } else {
+      break
+    }
+  }
+  set args [lrange $args $count end]
+  set _cmdlist $args
+  set _namespace [uplevel namespace current]
+}
+
+itcl::body library::AsyncChain::destructor {} {
+#  log::log debug "chain $this complete: [infostack]"
+  global ::library::_async_instances
+  set i [lsearch $::library::_async_instances $this]
+  if {$i != -1} {
+    set ::library::_async_instances [lreplace $::library::_async_instances $i $i]
+  }
+}
+
+itcl::configbody library::AsyncChain::timeout {
+  if {$timeout == -1 && [info exists _timer]} {
+    after cancel $_timer
+    unset _timer
+  }
+}
+
+itcl::body library::AsyncChain::append {args} {
+  set _cmdlist [concat $_cmdlist $args]
+}
+
+itcl::body library::AsyncChain::waitfor {cue} {
+  lappend _cues $cue
+}
+
+itcl::body library::AsyncChain::gocmd {{cue {}}} {
+  if {$cue == ""} {
+    return [list [namespace which $this] go]
+  } else {
+    return [list [namespace which $this] go $cue]
+  }
+}
+
+itcl::body library::AsyncChain::go {{cue {}}} {
+  if {$cue != ""} {
+    set i [lsearch -exact $_cues $cue]
+    if {$i != -1} {
+      set _cues [lreplace $_cues $i $i]
+    }
+    if {[llength $_cues] != 0} {
+      return $_cues
+    }
+  } else {
+    set _cues {}
+  }
+  after idle [ifexists [list $this _go]]
+  return
+}
+
+itcl::body library::AsyncChain::_go {} {
+  # only for cmdline debugging
+  # dump "_go" 
+#  log::log debug "chain $this executing next step"
+  if {[info exists _timer]} {
+    after cancel $_timer
+    unset _timer
+  }
+  if {[info exists _sysTimer]} {
+    after cancel $_sysTimer
+    unset _sysTimer
+  }
+  while {$_index < [expr [llength $_cmdlist] / 2]} {
+    set type [lindex $_cmdlist [expr $_index * 2]]
+    set cmd [lindex $_cmdlist [expr $_index * 2 + 1]]
+    incr _index
+    if {$cmd == ""} continue
+#    log::log debug "chain $this executing $cmd"
+    if {[catch {namespace inscope $_namespace [list eval $cmd]} err]} {
+      global errorInfo errorCode
+      log::log debug "error from async chain: $errorInfo"
+      _handleError $err $errorInfo $errorCode
+      if {$stopOnError} return
+    }
+    if {[string match -nocase a* $type]} {
+      set _sysTimer [ after 1000 [ifexists [list $this _checkSystem]] ]
+      if {$timeout > 0} {
+        set _timer [after $timeout [ifexists [list $this _timeout]]]
+      }
+      return
+    }
+    ;# the async command will have to get back to us
+  }
+  # if we get here, we're done with the chain
+  set longthis [namespace which $this]
+  if {$longthis != "" } {
+    after idle [list do_if_exists $longthis itcl::delete object $longthis]
+  }
+  return
+}
+
+itcl::body library::AsyncChain::_handleError {err ei ec} {
+  if {$errorcmd != ""} {
+    if {[catch {namespace inscope $_namespace "$errorcmd [list $err $ei $ec]"} err2]} {
+      global errorInfo errorCode
+      logError "Error in error handler: $err2" $errorInfo $errorCode
+      logError "Original error: $err" $ei $ec
+    }
+  }
+  set longthis [namespace which $this]
+  if {$longthis != "" } {
+    after idle [list do_if_exists $longthis itcl::delete object $longthis]
+  }
+}
+
+itcl::body library::AsyncChain::_timeout {args} {
+  _handleError "timeout from [lindex $_cmdlist [expr $_index * 2 - 1]]" {} {}
+  set longthis [namespace which $this]
+  if {$longthis != "" } {
+    after idle [list do_if_exists $longthis itcl::delete object $longthis]
+  }
+}
+
+itcl::body library::AsyncChain::_checkSystem {} {
+  set _sysTimer [ after 1000 [ifexists [list $this _checkSystem]] ]
+}
+
+itcl::body library::AsyncChain::logError {err errorInfo errorCode} {
+  log::log error "error in async command chain: $err\n$errorInfo"
+}
+
+package provide asyncchain 0.1

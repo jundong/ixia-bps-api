@@ -1,0 +1,44 @@
+package require Itcl
+
+itcl::class %CLASS% {
+  inherit model::IPv4
+
+  constructor {args} {}
+  destructor {}
+
+  protected common min %MIN%
+  protected common max %MAX%
+  protected common intmin {}
+  protected common intmax {}
+
+  public variable value
+}
+
+itcl::body %CLASS%::constructor {args} {
+  set _type ip_address
+  if {"" == $intmin} {
+    set intmin [intValue $min]
+  }
+  if {"" == $intmax} {
+    set intmax [intValue $max]
+  }
+  foreach arg {itemname} {
+    set cfgix [lsearch $args -$arg]
+    if {$cfgix != -1 && ($cfgix % 2) == 0 && ([llength $args] % 2) == 0} {
+      configure -$arg [lindex $args [expr $cfgix + 1]]
+    }
+  }
+  configure -value "%DEFAULT%"
+  eval configure $args
+  if {![info exists value]} {
+    error "value must be specified" {} RUNTIME_ERROR
+  }
+}
+
+itcl::body %CLASS%::destructor {} {
+}
+
+itcl::configbody %CLASS%::value {
+}
+
+log::log warn "ipv4 %CLASS% declared"

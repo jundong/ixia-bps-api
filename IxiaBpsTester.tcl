@@ -85,12 +85,18 @@ namespace eval IXIA {
         public method configureSuperflow { name action type parameters args } {}
         public method configureComponent { testName componentName args } {}
         public method configureAppProfile { appProfileName superFlowName action args } {}
+        public method configurePort { slot port args } {}
+        
         public method save { name args } {}
         public method delete { name args } {}
         
         public method importTest { name args } {}
         public method exportTest { name args } {}
         public method exportReport { name args } {}
+        
+        public method startCapture {} { $_connection startPacketTrace }
+        public method stopCapture {} { $_connection stopPacketTrace }
+        public method exportCapture { dir slot port direction args } {}
         
         public method getRtStats { name args } {}
         public method getAggStats { name args } {}
@@ -196,6 +202,45 @@ namespace eval IXIA {
         }
     }
 
+    #--
+    # Name: configurePort - Configure Ports
+    #--
+    # Parameters: 
+    #       portlist: Port list to configure, eg. [list {1 0} {1 1}]
+    #       args:
+    #               -auto: Wether working with auto nigotiation mode, default value is true
+    #               -speed: Port speed, default value is true
+    #               -fullduplex: Wether working with full duplex mode, default value is true
+    #           ..........
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::configurePort { portList args } {
+        set tag "body Tester::configurePort $portList $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { [ llength $portList ] == 0 } {
+            error "configurePort portList must be specified"
+        }
+        
+        set slot ""
+        set port ""
+        if { [ catch {
+            foreach sp $portList {
+                set slot [lindex $sp 0]
+                set port [lindex $sp 1]
+                set cmd "$_chassis configurePort $slot $port $args"
+                Deputs $cmd
+                eval $cmd
+            }
+        } err ] } {
+            Deputs "----- Failed to configurePort port $slot/$port: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
     #--
     # Name: configure - Configure created object
     #--
@@ -687,8 +732,11 @@ namespace eval IXIA {
                 set cmd "$_connection deleteAppProfile $name $args"
                 unset _appProfiles($name)
             } elseif { [ info exists _components($name) ] } {
-                set cmd "$_connection deleteLoadProfile $name $args"
+                set cmd "itcl::delete object $_components($name)"
                 unset _components($name)
+            } elseif { [ info exists _superflows($name) ] } {
+                set cmd "$_connection deleteSuperflow $name $args"
+                unset _superflows($name)
             }
             
             if { $cmd != "" } {
@@ -895,6 +943,59 @@ namespace eval IXIA {
         return [GetStandardReturnHeader]
     }
         
+    #--
+    # Name: exportCapture - Export test capture
+    #--
+    # Parameters:
+    #       portlist: Port list to unreserve, eg. [list {1 0} {1 1}]
+    #       dir: Directory to put export capture
+    #       direction: Packets direction in capture, eg. tx, rx or both
+    #       args:
+    #           -compress: Whether compress the capture data
+    #           -txsnaplen: Truncates transmitted packets
+    #                       that are larger than txsnaplen bytes
+    #           -rxsnaplen: Truncates received packets
+    #                       that are larger than rxsnaplen bytes
+    #           -txfilter: Filter packets from specified host, eg. "host 10.1.0.254"
+    #           -rxfilter: Filter packets from specified host, eg. "host 10.1.0.254"
+    #           ................. 
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::exportCapture { portlist dir direction args } {
+        set tag "body Tester::exportCapture $portlist $dir $direction $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists portlist ] } {
+            error "exportCapture portlist must be configured"
+        }
+        
+        if { ![ info exists dir ] } {
+            error "exportCapture dir must be configured"
+        }
+        
+        if { ![ info exists direction ] } {
+            error "exportCapture direction must be configured"
+        }
+        
+        set slot ""
+        set port ""
+        if { [ catch {
+            foreach sp $portlist {
+                set slot [lindex $sp 0]
+                set port [lindex $sp 1]
+                set cmd "$_chassis exportPacketTrace $dir $args $slot $port $direction"
+                Deputs $cmd
+                eval $cmd
+            }
+        } err ] } {
+            Deputs "----- Failed to export capture from $slot/$port: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
     #--
     # Name: exportTest - Export test from Bps system
     #--

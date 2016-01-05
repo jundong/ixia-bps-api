@@ -1,0 +1,289 @@
+package require Itcl
+package require tdom
+package require log
+package require ifexists
+
+namespace eval flash {
+  namespace export flashinterp
+}; # end of namespace installer
+
+#
+# This class hooks up a tcl interpreter to a flash channel. Data recieved on the
+# flash channel will be evaled in a safe interp, and the results will be sent
+# back.
+#
+# a default safe interp is created, but it's accessible if the caller wants to
+# customize what's available in the interp
+#
+itcl::class flash::FlashInterp {
+  public variable inchan     stdin   ;# channel input will come in on
+  public variable outchan    stdout  ;# channel output will go out on
+  public variable onclose    {}      ;# command to run when the input is closed
+  public variable locale     en      ;# locale to set before running a command
+  public variable wrap       1       ;# whether to wrap responses for the GUI
+  public variable userid     {}      ;
+
+  protected variable channel	 ;# FlashChannel object
+  protected variable interp	 ;# interpreter
+
+  constructor {args} {}
+  destructor {}
+
+  public method interp {}
+  public method close {}
+
+  public method commandToXml {commandstr}
+  public method xmlToCommand {xmldoc tokenvar}
+  public method send {data {xmltype update} {token ""} {errcode {}}}
+
+  protected method _channelclosed {}
+  protected method _channeldata {data}
+  protected method _send {data {xmltype none} {token ""} {error {}}}
+
+  protected method _trycallback {cb args}
+
+  protected method _elementStart {name attlist}
+  protected method _elementEnd {name}
+  protected method _chardata {chardata}
+}
+
+
+proc flash::flashinterp {args} {
+  uplevel flash::FlashInterp $args
+}
+
+
+itcl::body flash::FlashInterp::constructor {args} {
+  eval configure $args
+  set interp [::interp create -safe]
+  set channel [flash::FlashChannel #auto -inchan $inchan -outchan $outchan \
+                 -onclose [ifexists [list $this _channelclosed]] \
+		 -ondata [ifexists [list $this _channeldata]]]
+}
+
+itcl::configbody flash::FlashInterp::inchan {
+  if {![info exists channel]} return
+  $channel configure -inchan $inchan
+}
+
+itcl::configbody flash::FlashInterp::outchan {
+  if {![info exists channel]} return
+  $channel configure -inchan $inchan
+}
+
+itcl::configbody flash::FlashInterp::locale {
+}
+
+itcl::body flash::FlashInterp::destructor {} {
+  if {[info exists interp]} {
+    ::interp delete $interp
+  }
+  if {[info exists channel]} {
+    itcl::delete object $channel
+  }
+}
+
+itcl::body flash::FlashInterp::interp {} {
+  return $interp
+}
+
+itcl::body flash::FlashInterp::close {} {
+  $channel close
+  _trycallback $onclose
+}
+
+itcl::body flash::FlashInterp::_channelclosed {} {
+  _trycallback $onclose
+}
+
+#
+# called when new data has come in
+#
+itcl::body flash::FlashInterp::_channeldata {line} {
+  set xml none
+  if {$line == ""} return
+  # have to keep this commented out in normal usage, or it'll log passwords
+  #log::log debug "received \"$line\""
+  set token ""
+  if {[regexp {^\s*<} $line]} {
+    set xml reply
+    if {[catch {xmlToCommand $line token} line]} {
+      global errorInfo
+      $this _send "invalid XML: $line" $xml $token [list RUNTIME_ERROR $errorInfo]
+      return
+    }
+  }
+  if {[info exists interp]} {
+    set code [catch {$interp eval $line} ret]
+    switch $code {
+      0 {
+	do_if_exists $this _send $ret $xml $token
+      }
+      3 { ;# break
+        # the command that was executed is on its own to send a reply
+      }
+      default {
+	global errorInfo errorCode
+	set errcode $errorCode
+	set errinfo $errorInfo
+        foreach haspassword {login} {
+          regsub -line "^\"$haspassword .*\"$" $errinfo \
+                    "\"$haspassword (args removed)\"" errinfo
+        }
+	do_if_exists $this _send $ret $xml $token $errcode
+      }
+    }
+  } else {
+    do_if_exists $this _send "error: no interpreter configured" $xml $token
+  }
+}
+
+itcl::body flash::FlashInterp::send {data {xmltype update} {token ""} {errcode {}}} {
+  $this _send $data $xmltype $token $errcode
+}
+
+#?????????? return values don't work correctly for tcl stuff, since it's hard to
+# know whether to treat them as strings or as lists
+itcl::body flash::FlashInterp::_send {string {xmltype none} {token ""} {errcode {}}} {
+  global errorInfo
+  if {$xmltype != "none"} {
+    if {"" != $errcode} {
+      if {"NONE" == $errcode} {
+	set errcode [list RUNTIME_ERROR $errorInfo]
+      } elseif {"RUNTIME_ERROR" == $errcode} {
+	set errcode [list RUNTIME_ERROR $errorInfo]
+      }
+      set errargs [lrange $errcode 1 end]
+      set errcode [lindex $errcode 0]
+
+      if {$wrap} {
+        dom createDocument com doc
+        $doc documentElement root
+        $root setAttribute type $xmltype
+        $root setAttribute token $token
+        $root setAttribute status error
+        $root appendFromScript {
+          domNode::error
+        }
+        set root [$root selectNodes error]
+      } else {
+        dom createDocument error doc
+        $doc documentElement root
+      }
+      $root setAttribute id $errcode
+
+      $root appendFromScript {
+        set key 0
+        foreach arg $errargs {
+          domNode::subst -key "%[incr key]\$s" {
+            domNode::text $arg
+          }
+        }
+      }
+      set string [$doc asXML]
+    } elseif {"" == $string} {
+      if {$wrap} {
+        dom createDocument com doc
+        $doc documentElement root
+        $root setAttribute type $xmltype
+        $root setAttribute token $token
+        $root setAttribute status ok
+	set string [$doc asXML]
+      } else {
+	set string "<ok/>"
+      }
+    } else {
+      if {![string match "<*" $string]} {
+	set string [commandToXml "return $string"]
+      }
+      if {$wrap} {
+        dom createDocument com doc
+        $doc documentElement root
+        $root setAttribute type $xmltype
+        $root setAttribute token $token
+        $root setAttribute status ok
+        $root appendXML $string
+	set string [$doc asXML]
+      }
+    }
+  } elseif {"" != $errcode} {
+    if {"NONE" == $errcode} {
+      set errcode [list RUNTIME_ERROR $errorInfo]
+    } elseif {"RUNTIME_ERROR" == $errcode} {
+      set errcode [list RUNTIME_ERROR $errorInfo]
+    }
+    set errargs [lrange $errcode 1 end]
+    set errcode [lindex $errcode 0]
+
+    set string $errcode
+  }
+  if {[catch {$channel send $string} err]} {
+    # couldn't write reponse, other end must have disconnected already
+    # 'fired and forgot'
+    global errorInfo
+    log::log warn $errorInfo
+  }
+  return
+}
+
+#
+# convert a tcl command into an XML syntax - used for sending correctly
+# formatted results of things that don't natively return XML
+#
+itcl::body flash::FlashInterp::commandToXml {commandstr} {
+  set cmd [lindex $commandstr 0]
+  if {![regexp {^\w+$} $cmd]} {
+    error "invalid command format \"$commandstr\"" {} RUNTIME_ERROR
+  }
+  dom createDocument $cmd doc
+  $doc documentElement root
+  set count 1
+  foreach {key value} [lrange $commandstr 1 end] {
+    if {"--" == $key} {
+      incr count
+      break
+    }
+    if {![string match -* $key]} break
+    incr count 2
+    $root setAttribute [string range $key 1 end] $value
+  }
+  $root appendFromScript {
+    foreach arg [lrange $commandstr $count end] {
+      domNode::param {
+        domNode::text $arg
+      }
+    }
+  }
+  return [$doc asXML]
+}
+
+itcl::body flash::FlashInterp::_trycallback {cb args} {
+  if {"" == $cb} return
+  catch {uplevel #0 $cb $args}
+}
+
+#
+# convert an xml document into a tcl command that can then be just 'eval'ed
+#
+itcl::body flash::FlashInterp::xmlToCommand {xmldoc tokenvar} {
+  upvar $tokenvar token
+  dom parse $xmldoc dom
+  $dom documentElement doc
+  set cmd [$doc nodeName]
+  foreach attr [$doc attributes] {
+    if {$attr == "token"} {
+      set token [$doc getAttribute $attr]
+    }
+    lappend cmd -$attr [$doc getAttribute $attr]
+  }
+  set text [$doc text]
+  if {$text == "" || [catch {set cmd [concat $cmd $text]}]} {
+    foreach body [$doc child all] {
+      lappend cmd [$body asXML]
+    }
+  }
+
+  return $cmd
+}
+
+package provide flash::flashinterp 0.1

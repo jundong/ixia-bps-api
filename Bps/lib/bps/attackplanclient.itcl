@@ -1,0 +1,380 @@
+itcl::class bps::AttackPlanClient {
+  inherit bps::Client
+
+  constructor {bpsobj template args} {
+    Client::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _construction 0
+  protected variable _xmldoc
+  protected variable _xmlroot
+  protected variable _counter 0
+
+  public method getGroups {}
+  public method addGroup {id args}
+  public method modifyGroup {id args}
+  public method getGroupParameters {id}
+  public method unsetGroupParameter {id args}
+  public method removeGroup {id}
+
+  public method getStrikes {groupid}
+  public method addStrike {groupid name}
+  public method removeStrike {groupid name}
+  public method addStrikeSet {groupid name}
+  public method removeStrikeSet {groupid name}
+
+  public method save {args}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+  protected method _updateXML {args}
+  protected method _createCommand {docvar rootvar command}
+  protected method _makeChange {domdoc}
+  protected method _getGroupParamObj {groupid}
+
+  # override this because default doesn't make sense in our case
+  protected method _describeStruct {groupid prefix}
+}
+
+itcl::body bps::AttackPlanClient::constructor {
+	  bpsobj template args} {
+  _createCommand doc root setWorkingAttackPlan
+  if {[string compare $template ""] != 0} {
+    $root setAttribute template $template
+  }
+
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  set _construction 1
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+
+  set name [namespace tail $this]
+  $_bpsobj _exec [list workingAttackPlanModify -instance $_context \
+                     -name $name]
+  array set _default [list name $name]
+
+  configure -name $name
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  set _construction 2
+  return
+}
+
+itcl::body bps::AttackPlanClient::destructor {} {
+  if {$_construction >= 1} {
+    catch {$_bpsobj _exec "workingAttackPlanForget -instance $_context"}
+  }
+}
+
+itcl::body bps::AttackPlanClient::getGroups {} {
+  set ret {}
+  foreach item [$_xmlroot selectNodes "list\[@id = 'attackPlan'\]/struct"] {
+    lappend ret [$item @id]
+  }
+  return $ret
+}
+
+itcl::body bps::AttackPlanClient::addGroup {id args} {
+  set optlist {
+    {force false "force overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "addGroup options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "addGroup options:"]
+  }
+  if {![string is boolean -strict $opts(force)]} {
+  		error "Invalid value for force, must be 'true' or 'false'" \
+  		  {} [list INVALID_FORCE $opts(force)]
+  }
+  _createCommand doc root workingAttackPlanAddGroup 
+  $root setAttribute groupid $id
+  $root setAttribute force $opts(force)
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AttackPlanClient::modifyGroup {id args} {
+  set groupopts [$_xmlroot selectNodes \
+      "list\[@id = 'attackPlan'\]/struct\[@id='$id'\]/struct\[@id='StrikeOptions'\]"]
+
+  if {[llength $args] == 0} {
+    set current [model::ComponentProxy::flatComponentParams $groupopts]
+    set ret {}
+    foreach {key val} $current {
+      lappend ret -$key $val
+    }
+    return $ret
+  }
+
+  _createCommand doc root workingAttackPlanModifyGroup 
+  $root setAttribute groupid $id
+
+  set paramtype [_getGroupParamObj $id]
+  try {
+    set vals [model::ComponentProxy::parseComponentParams $groupopts]
+    # -force doesn't take an arg, so handle it special
+    if {[set i [lsearch -exact $args -force]] != -1} {
+        $root setAttribute force true
+        lreplace args $i $i
+    } else {
+    		$root setAttribute force false
+    }
+    foreach {key value} $args {
+    		if {![string match -* $key]} {
+    				error "Invalid option $key"
+    		}
+    		switch -- $key {
+    				-newid {
+    						$root setAttribute newgroupid $value
+    				}
+    				-force {
+    						$root setAttribute force $value
+    				}
+    				default {
+    						set key [string range $key 1 end]
+    						set path {}
+    						foreach part [split $key .] {
+    								lappend path $part
+    								if {![eval dict exists [list $vals] $path]} {
+    										eval dict set vals $path [list {}]
+    								}
+    						}
+    						eval dict set vals $path [list $value]
+    				}
+    		}
+    }
+    set param [$paramtype #auto -value $vals]
+    dom parse [$param paramSpec group] paramdoc
+    $paramdoc documentElement paramroot
+  } finally {
+    if {[info exists param]} {
+      itcl::delete object $param
+    }
+    namespace delete [namespace qualifiers $paramtype]
+  }
+  foreach setting [$paramroot selectNodes child::node()] {
+    $root appendChild $setting
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AttackPlanClient::getGroupParameters {id} {
+  _createCommand doc root workingAttackGroupGetParameters
+  $root setAttribute groupid $id
+  set desc [$_bpsobj _execXml [$doc asXML]]
+  dom parse $desc doc
+  $doc documentElement root
+  return [_describeStruct [$root selectNodes members] {}]
+}
+
+itcl::body bps::AttackPlanClient::unsetGroupParameter {id args} {
+  set groupopts [$_xmlroot selectNodes \
+      "list\[@id = 'attackPlan'\]/struct\[@id='$id'\]/struct\[@id='StrikeOptions'\]"]
+  _createCommand doc root workingAttackPlanModifyGroup 
+  $root setAttribute groupid $id
+
+  set paramtype [_getGroupParamObj $id]
+  try {
+    set vals [model::ComponentProxy::parseComponentParams $groupopts]
+    foreach key $args {
+      if {![string match -* $key]} {
+        error "Invalid option $key"
+      }
+      set key [string range $key 1 end]
+      set path {}
+      foreach part [split $key .] {
+        lappend path $part
+        if {![eval dict exists [list $vals] $path]} {
+          error "No value is set for group parameter -$key"
+        }
+      }
+      eval dict unset vals $path
+      set path [lrange $path 0 end-1]
+      while {[llength $path] > 0 && [eval dict get [list $vals] $path] == {}} {
+        eval dict unset vals $path
+        set path [lrange $path 0 end-1]
+      }
+    }
+    set param [$paramtype #auto -value $vals]
+    dom parse [$param paramSpec group] paramdoc
+    $paramdoc documentElement paramroot
+  } finally {
+    if {[info exists param]} {
+      itcl::delete object $param
+    }
+    namespace delete [namespace qualifiers $paramtype]
+  }
+  foreach setting [$paramroot selectNodes child::node()] {
+    $root appendChild $setting
+  }
+  if {[llength $vals] == 0} {
+    $root appendFromScript {
+      domNode::none
+    }
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AttackPlanClient::removeGroup {id} {
+  _createCommand doc root workingAttackPlanRemoveGroup
+  $root setAttribute groupid $id
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AttackPlanClient::getStrikes {groupid} {
+  set ret {}
+  foreach item [$_xmlroot selectNodes \
+      "list\[@id = 'attackPlan'\]/struct\[@id='$groupid'\]/list\[@id='strikes'\]/struct/param\[@id='strike' or @id='strikeset'\]"] {
+    lappend ret [$item @id] [[$item selectNodes child::node()] asXML]
+  }
+  return $ret
+}
+
+itcl::body bps::AttackPlanClient::addStrike {groupid name} {
+  _createCommand doc root workingAttackGroupAddStrike 
+  $root setAttribute groupid $groupid
+  $root appendFromScript {
+    domNode::strike -id $name
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AttackPlanClient::removeStrike {groupid name} {
+  _createCommand doc root workingAttackGroupRemoveStrike
+  $root setAttribute groupid $groupid
+  $root appendFromScript {
+    domNode::strike -id $name
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AttackPlanClient::addStrikeSet {groupid name} {
+  _createCommand doc root workingAttackGroupAddStrike 
+  $root setAttribute groupid $groupid
+  $root appendFromScript {
+    domNode::strikeset -id $name
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AttackPlanClient::removeStrikeSet {groupid name} {
+  _createCommand doc root workingAttackGroupRemoveStrike
+  $root setAttribute groupid $groupid
+  $root appendFromScript {
+    domNode::strikeset -id $name
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AttackPlanClient::save {args} {
+  set optlist {
+      {name.arg {} "saved model name"}
+      {force false "overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+  _createCommand doc root workingAttackPlanSave
+  foreach attr {name force} {
+    $root setAttribute $attr $opts($attr)
+  }
+  _makeChange $doc
+}
+
+itcl::body bps::AttackPlanClient::_cget {option} {
+  switch -exact -- $option {
+    name {return [$_xmlroot @name]}
+  }
+  error "Unknown option $option"
+}
+
+itcl::body bps::AttackPlanClient::_doConfigChange {args} {
+  foreach {option value} $args {
+    switch -exact -- $option {
+      -name {
+        _createCommand doc root workingAttackPlanModify
+        $root setAttribute name $value
+        _makeChange $doc
+      }
+      default {
+        error "Unknown option $option"
+      }
+    }
+  }
+  return
+}
+
+itcl::body bps::AttackPlanClient::_updateXML {} {
+  set ret [$_bpsobj _exec [list getWorkingAttackPlan -instance $_context]]
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+  return
+}
+
+itcl::body bps::AttackPlanClient::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+}
+
+itcl::body bps::AttackPlanClient::_makeChange {domdoc} {
+  set ret [$_bpsobj _execXml [$domdoc asXML]]
+  _updateXML
+  return $ret
+}
+
+itcl::body bps::AttackPlanClient::_getGroupParamObj {groupid} {
+  _createCommand doc root workingAttackGroupGetParameters
+  $root setAttribute groupid $groupid
+  set desc [$_bpsobj _execXml [$doc asXML]]
+  dom parse $desc doc
+  $doc documentElement root
+  set namespace [namespace current]::s[incr _counter]
+
+  set memberlist [model::processTypeDeclarationList $namespace \
+                                   [$root selectNodes members] ]
+  set constraintlist {}
+  return [model::defineStruct $namespace params \
+                                         $memberlist \
+                                         $constraintlist]
+}
+
+itcl::body bps::AttackPlanClient::_describeStruct {xmlnode prefix} {
+  if {$prefix != ""} {
+    set prefix ${prefix}.
+  }
+  set ret {}
+  foreach node [$xmlnode selectNodes child::*] {
+    set name [$node @id [$node @name ""]]
+    switch [$node nodeName] {
+      list -
+      struct {
+        eval lappend ret [_describeStruct [$node selectNodes members] $prefix$name]
+      }
+      default {
+        set descnode [$node selectNodes description/child::*/child::node()]
+        set description ""
+        if {$descnode != ""} {
+          set description [$descnode asXML]
+        }
+        lappend ret -$prefix[$node @id [$node @name ""]] $description
+      }
+    }
+  }
+  return $ret
+}
+
+package provide bps::AttackPlanClient 0.1

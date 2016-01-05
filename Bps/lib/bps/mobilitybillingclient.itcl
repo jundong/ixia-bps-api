@@ -1,0 +1,587 @@
+package require Itcl
+
+itcl::class bps::MobilityBillingClient {
+  constructor {bpsobj args} {}
+  destructor {}
+
+  public variable port    8900
+  public variable group   1
+
+  protected variable _bpsobj    ;# reference to bps connection object
+  protected variable _chassis   ;# self-owned chassis object
+  protected variable _socket    ;# socket file descriptor connected to service
+  protected variable _channel   ;# flash channel for socket connection
+  protected variable _reply     ;# variable for storing replies from the socket
+  protected variable _nplist {} ;# list of valid NP names
+  protected variable _managedInterfaces ;# array of interfaces 
+                                ;# being managed
+  protected variable _oldgroup  1
+
+  public method force_idle {}
+
+  public method servers {} { return $_nplist }
+
+  public method show_defaults {}
+  public method set_defaults {dict}
+  public method show_interfaces {}
+  public method show_tests {}
+  public method set_mode {mode args}
+
+  public method alloc_hosts {server interface domainid subnetid args}
+  public method show_hosts {server interface domainid subnetid args}
+  public method set_hosts {server interface domainid subnetid dict}
+  public method start_hosts {server interface domainid subnetid args}
+  public method stop_hosts {server interface domainid subnetid args}
+
+  public method _execXml {xml}
+
+  protected common _hostModes {
+    automatic
+    semi_automatic
+    manual
+  }
+
+  protected method _set_interface {slot interface args}
+  protected method _channeldata {data} ;# called when data is available
+  protected method _channelclosed {}   ;# called when socket is closed
+  protected method _onreserve {slot interface owner group}   ;# called when a
+                                       ;# port reservation is changed
+  protected method _onexit {command op};# called when program exits
+  protected method _createCommand {cmd on_server docvar rootvar}
+  protected method _interfaces {{ingoreempty false}}
+}
+
+itcl::body bps::MobilityBillingClient::constructor {bpsobj args} {
+  set _bpsobj $bpsobj
+  if {[catch {
+    set host [$_bpsobj host]
+    set _socket [socket $host $port]
+    set _channel [flash::FlashChannel #auto -inchan $_socket -outchan $_socket]
+
+    $_channel configure -onclose [namespace code [list $this _channelclosed]] \
+			-ondata [namespace code [list $this _channeldata]]
+    set _chassis [$_bpsobj getChassis -onreserve \
+                                 [namespace code [list $this _onreserve]]]
+    # make sure if the shell exits, we leave things in automatic mode
+    trace add execution ::exit enter [namespace code [list $this _onexit]]
+    # give time for NPs to respond
+    after 5000
+    eval configure $args
+  } err]} {
+    global errorCode errorInfo
+    set ec $errorCode
+    set ei $errorInfo
+    if {[info exists _chassis]} {
+      itcl::delete object $_chassis
+    }
+    if {[info exists _channel]} {
+      itcl::delete object $_channel
+    }
+    if {[info exists _socket]} {
+      close $_socket
+    }
+    error $err $ei $ec
+  }
+}
+
+itcl::body bps::MobilityBillingClient::destructor {} {
+  trace remove execution ::exit enter [namespace code [list $this _onexit]]
+  # If we have a connection to work with, make sure we leave things in
+  # automatic mode
+  if {[info exists _chassis] && [info exists _channel]} {
+    dict for {slot interfaces} [array get _managedInterfaces] {
+        foreach interface $interfaces {
+            _set_interface $slot $interface \
+                               -mode automatic
+        }
+    }
+  }
+
+  if {[info exists _chassis]} {
+    itcl::delete object $_chassis
+  }
+  if {[info exists _channel]} {
+    itcl::delete object $_channel
+  }
+  if {[info exists _socket]} {
+    close $_socket
+  }
+}
+
+itcl::configbody bps::MobilityBillingClient::group {
+    set newgroup $group
+    set group $_oldgroup
+    dict for {slot interfaces} [array get _managedInterfaces] {
+        foreach interface $interfaces {
+            _set_interface $slot $interface \
+                               -mode automatic
+        }
+    }
+    set group $newgroup
+    set _oldgroup $newgroup
+    return
+}
+
+itcl::body bps::MobilityBillingClient::force_idle {} {
+    dict for {slot interfaces} [_interfaces] {
+        foreach interface $interfaces {
+            _set_interface $slot $interface -mode automatic -force_mode_idle
+        }
+    }
+    return
+}
+
+
+itcl::body bps::MobilityBillingClient::show_defaults {} {
+    set ret {}
+    foreach slot [dict keys [_interfaces]] {
+        foreach np $_nplist {
+            if {[string match "np$slot-*" $np]} {
+                _createCommand show_defaults $np doc root
+                dom parse [_execXml [$doc asXML]] doc
+                $doc documentElement root
+                foreach node [$root selectNodes child::node()] {
+                    dict set ret $np [$node nodeName] {}
+                    foreach attr [$node attributes] {
+                        dict set ret $np [$node nodeName] $attr [$node @$attr]
+                    }
+                    foreach subnode [$node selectNodes child::node()] {
+                        foreach subattr [$subnode attributes] {
+                            dict set ret $np [$node nodeName] [$subnode nodeName] $subattr [$subnode @$subattr]
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return $ret
+}
+
+itcl::body bps::MobilityBillingClient::set_defaults {dict} {
+    set ret {}
+    foreach slot [dict keys [_interfaces]] {
+        foreach np $_nplist {
+            if {[string match "np$slot-*" $np]} {
+                _createCommand set_defaults $np doc root
+                if {[dict exists $dict $np]} {
+                    # data set on per-NP bases
+                    set data [dict get $dict $np]
+                } else {
+                    # data set globally
+                    set data $dict
+                }
+                $root appendFromScript {
+                    dict for {node sdata} $data {
+                        if {$node != "gtpv1"} {
+                            eval [list domNode::$node] $sdata
+                        } else {
+                            set qos [dict get $sdata qos]
+                            dict unset sdata qos
+                            eval [list domNode::$node] $sdata [list {
+                                eval domNode::qos $qos
+                            }]
+                        }
+                    }
+                }
+                _execXml [$doc asXML]
+            }
+        }
+    }
+    return
+}
+
+itcl::body bps::MobilityBillingClient::show_interfaces {} {
+    set ret {}
+    foreach slot [dict keys [_interfaces]] {
+        foreach np $_nplist {
+            if {[string match "np$slot-*" $np]} {
+                _createCommand show_interfaces $np doc root
+                dom parse [_execXml [$doc asXML]] doc
+                $doc documentElement root
+                foreach interface [$root selectNodes interface] {
+                    set interface_id [$interface @interface_id]
+                    dict set ret $np $interface_id {}
+                    foreach attr [$interface attributes] {
+                        if {$attr == "interface_id"} continue
+                        dict set ret $np $interface_id $attr [$interface @$attr]
+                    }
+                }
+            }
+        }
+    }
+    return $ret
+}
+
+itcl::body bps::MobilityBillingClient::show_tests {} {
+    set ret {}
+    foreach slot [dict keys [_interfaces]] {
+        foreach np $_nplist {
+            if {[string match "np$slot-*" $np]} {
+                _createCommand show_tests $np doc root
+                dom parse [_execXml [$doc asXML]] doc
+                $doc documentElement root
+                foreach test [$root selectNodes test] {
+                    set test_id [$test @test_id]
+                    dict set ret $np $test_id {}
+                    foreach interface [$test selectNodes interface] {
+                        set interface_id [$interface @interface_id]
+                        dict set ret $np $test_id $interface_id {}
+                        foreach attr [$interface attributes] {
+                            if {$attr == "interface_id"} continue
+                            dict set ret $np $test_id $interface_id $attr [$interface @$attr]
+                            foreach subnet [$interface selectNodes subnet] {
+                                set subnet_id [$subnet @subnet_id]
+                                dict set ret $np $test_id $interface_id $subnet_id {}
+                                foreach sattr [$subnet attributes] {
+                                    if {$sattr == "subnet_id"} continue
+                                    dict set ret $np $test_id $interface_id $subnet_id \
+                                        $sattr [$subnet @$sattr]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return $ret
+}
+
+itcl::body bps::MobilityBillingClient::set_mode {mode args} {
+    if {[lsearch $bps::MobilityBillingClient::_hostModes $mode] == -1} {
+        error "invalid mode $mode"
+    }
+    if {[llength $args] == 0} {
+        dict for {slot interfaces} [_interfaces] {
+            foreach interface $interfaces {
+                lappend args $slot $interface
+            }
+        }
+    }
+    foreach {slot interface} $args {
+        _set_interface $slot $interface \
+                               -mode $mode
+    }
+    return
+}
+
+itcl::body bps::MobilityBillingClient::alloc_hosts {server interface domainid subnetid 
+            args} {
+    set optlist {
+        {count.arg {} "host count"}
+        {component_id.arg {} "component id"}
+    }
+    array set opts [cmdline::getoptions args $optlist "set_interface options:"]
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "set_interface options:"]
+    }
+    _createCommand alloc_hosts $server doc root
+    $root setAttribute interface_id $interface
+    $root setAttribute domain_id $domainid
+    $root setAttribute subnet_id $subnetid
+    foreach opt {
+        count
+        component_id
+    } {
+        if {$opts($opt) != ""} {
+            $root setAttribute $opt $opts($opt)
+        }
+    }
+    _execXml [$doc asXML]
+    return
+}
+
+itcl::body bps::MobilityBillingClient::show_hosts {server interface domainid subnetid 
+            args} {
+    set optlist {
+        {start_id.arg {} "start from this host ID"}
+        {count.arg {} "host count"}
+        {component_id.arg {} "component id"}
+    }
+    array set opts [cmdline::getoptions args $optlist "show_hosts options:"]
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "show_hosts options:"]
+    }
+    _createCommand show_hosts $server doc root
+    $root setAttribute interface_id $interface
+    $root setAttribute domain_id $domainid
+    $root setAttribute subnet_id $subnetid
+    foreach opt {
+        start_id
+        count
+        component_id
+    } {
+        if {$opts($opt) != ""} {
+            $root setAttribute $opt $opts($opt)
+        }
+    }
+    dom parse [_execXml [$doc asXML]] doc
+    $doc documentElement root
+    set ret {}
+    foreach host [$root selectNodes host] {
+        set host_id [$host @host_id]
+        dict set ret $host_id {}
+        foreach attr [$host attributes] {
+            if {$attr == "host_id"} continue
+            dict set ret $host_id $attr [$host @$attr]
+        }
+        foreach bearer [$host selectNodes bearer] {
+            set bearer_id [$bearer @bearer_id]
+            dict set ret $host_id bearers $bearer_id {}
+            foreach attr [$bearer attributes] {
+                if {$attr == "bearer_id"} continue
+                dict set ret $host_id bearers $bearer_id $attr [$bearer @$attr]
+            }
+        }
+    }
+    return $ret
+}
+
+itcl::body bps::MobilityBillingClient::set_hosts {server interface domainid subnetid 
+            dict} {
+    _createCommand set_hosts $server doc root
+    $root setAttribute interface_id $interface
+    $root setAttribute domain_id $domainid
+    $root setAttribute subnet_id $subnetid
+    $root appendFromScript {
+        dict for {host_id hostdata} $dict {
+            set node [domNode::host -host_id $host_id {
+                if {[dict exists $dict $host_id bearers]} {
+                    dict for {bearer_id bdata} [dict get $dict $host_id bearers] {
+                        set bnode [domNode::bearer -bearer_id $bearer_id]
+                        dict for {attr val} $bdata {
+                            $bnode setAttribute $attr $val
+                        }
+                    }
+                }
+            }]
+            dict for {attr val} $hostdata {
+                if {$attr == "bearers"} continue
+                $node setAttribute $attr $val
+            }
+        }
+    }
+    _execXml [$doc asXML]
+    return
+}
+
+itcl::body bps::MobilityBillingClient::start_hosts {server interface domainid subnetid 
+            args} {
+    set optlist {
+        {start_id.arg {} "start from this host ID"}
+        {count.arg {} "host count"}
+        {component_id.arg {} "component id"}
+    }
+    array set opts [cmdline::getoptions args $optlist "start_hosts options:"]
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "start_hosts options:"]
+    }
+    _createCommand start_hosts $server doc root
+    $root setAttribute interface_id $interface
+    $root setAttribute domain_id $domainid
+    $root setAttribute subnet_id $subnetid
+    foreach opt {
+        start_id
+        count
+        component_id
+    } {
+        if {$opts($opt) != ""} {
+            $root setAttribute $opt $opts($opt)
+        }
+    }
+    _execXml [$doc asXML]
+    return
+}
+
+itcl::body bps::MobilityBillingClient::stop_hosts {server interface domainid subnetid 
+            args} {
+    set optlist {
+        {start_id.arg {} "start from this host ID"}
+        {count.arg {} "host count"}
+        {component_id.arg {} "component id"}
+    }
+    array set opts [cmdline::getoptions args $optlist "stop_hosts options:"]
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "stop_hosts options:"]
+    }
+    _createCommand stop_hosts $server doc root
+    $root setAttribute interface_id $interface
+    $root setAttribute domain_id $domainid
+    $root setAttribute subnet_id $subnetid
+    foreach opt {
+        start_id
+        count
+        component_id
+    } {
+        if {$opts($opt) != ""} {
+            $root setAttribute $opt $opts($opt)
+        }
+    }
+    _execXml [$doc asXML]
+    return
+}
+
+itcl::body bps::MobilityBillingClient::_set_interface {slot interface args} {
+    set optlist {
+        {mode.arg automatic "mode"}
+        {force_mode_idle "force the interface immediately into idle mode"}
+    }
+    array set opts [cmdline::getoptions args $optlist "set_interface options:"]
+    if {[llength $args] > 0} {
+        error [cmdline::usage $optlist "set_interface options:"]
+    }
+    if {[lsearch $bps::MobilityBillingClient::_hostModes $opts(mode)] == -1} {
+        error "invalid mode $opts(mode)"
+    }
+    set fma {}
+    if {$opts(force_mode_idle)} {
+        set fma -force_mode_idle
+    }
+    foreach np $_nplist {
+        if {[string match "np$slot-*" $np]} {
+            _createCommand set_interface $np doc root
+            $root setAttribute interface_id $interface
+            $root setAttribute host_mode $opts(mode)
+            if {$opts(force_mode_idle)} {
+                $root setAttribute force_mode_idle true
+            }
+            _execXml [$doc asXML]
+            if {$opts(mode) != "automatic"} {
+                # remember that we own this one
+                lappend _managedInterfaces($slot) $interface
+            } else {
+                # no longer own this one
+                if {[info exists _managedInterfaces($slot)]} {
+                    set ix [lsearch $_managedInterfaces($slot) $interface]
+                    if {$ix != -1} {
+                        set _managedInterfaces($slot) [lreplace $_managedInterfaces($slot) $ix $ix]
+                    }
+                }
+            }
+        }
+    }
+}
+
+itcl::body bps::MobilityBillingClient::_execXml {xml} {
+#puts [regsub -all -line {^} $xml -->]
+    if {[info exists _reply]} {
+        error "Only one outstanding mobility API request allowed at a time"
+    }
+    set _reply pending
+    $_channel send $xml
+    vwait [itcl::scope _reply]
+    foreach {status val} $_reply break
+    unset _reply
+    switch -exact $status {
+        ok {
+            return $val
+        }
+        error {
+            dom parse $val doc
+            $doc documentElement root
+            set reason [$root @reason "unknown"]
+            error $reason
+        }
+        default {
+            error "unexpected response from server: $val"
+        }
+    }
+}
+
+itcl::body bps::MobilityBillingClient::_channeldata {data} {
+    if {[catch {
+        dom parse $data doc
+    } err]} {
+        puts stderr "invalid XML received from device: $err"
+        return
+    }
+    $doc documentElement root
+#puts [regsub -all -line {^} [$root asXML] <--]
+    switch -exact [$root nodeName] {
+        ready {
+            switch -exact [$root @state ""] {
+                connected {
+                    if {[$root hasAttribute server]} {
+                        lappend _nplist [$root @server]
+                    }
+                }
+                default {
+                    set _reply [list "ok" {}]
+                }
+            }
+        }
+        error {
+            set _reply [list "error" $data]
+        }
+        default {
+            set _reply [list "ok" $data]
+        }
+    }
+}
+
+itcl::body bps::MobilityBillingClient::_channelclosed {} {
+    # abort any pending commands, since they will never complete
+    set _reply [list error \
+            "<error reason='command aborted due to disconnect from device'/>"]
+}
+
+itcl::body bps::MobilityBillingClient::_onreserve {slot interface user ifgroup} {
+    if {[info exists _managedInterfaces($slot)]
+        && [lsearch $_managedInterfaces($slot) $interface] != -1} {
+        # see if we should stop managing this interface
+        if {$user != [$_bpsobj userid]
+            || $ifgroup != $group} {
+            _set_interface $slot $interface -mode automatic
+        }
+    }
+}
+
+itcl::body bps::MobilityBillingClient::_onexit {command op} {
+    catch {
+        dict for {slot interfaces} [array get _managedInterfaces] {
+            foreach interface $interfaces {
+                _set_interface $slot $interface \
+                                   -mode automatic
+            }
+        }
+    }
+    return
+}
+
+itcl::body bps::MobilityBillingClient::_createCommand {cmd on_server 
+                                                       docvar rootvar} {
+    upvar $docvar doc
+    upvar $rootvar root
+    dom createDocument $cmd doc
+    $doc documentElement root
+    if {[lsearch $_nplist $on_server] == -1} {
+        error "Invalid server name \"$on_server\""
+    }
+    $root setAttribute server $on_server
+}
+
+itcl::body bps::MobilityBillingClient::_interfaces {{ignoreempty false}} {
+    set state [$_chassis getState]
+    set ret {}
+    dict for {slot sdata} $state {
+        if {![string is integer $slot]} continue
+        dict for {iface idata} $sdata {
+            if {![string is integer $iface]} continue
+            if {![dict exists $idata group]
+                || [dict get $idata group] != $group} {
+                continue
+            }
+            if {![dict exists $idata reservedBy]
+                || [dict get $idata reservedBy] != [$_bpsobj userid]} {
+                continue
+            }
+            dict lappend ret $slot $iface
+        }
+    }
+    if {$ret == "" && !$ignoreempty} {
+        error "There are no reserved interfaces"
+    }
+    return $ret
+}
+
+package provide bps::MobilityBillingClient 0.1

@@ -1,0 +1,258 @@
+itcl::class bps::ResiliencyBase {
+  constructor {bpsobj template args} {}
+  destructor {}
+
+  public variable deviceType {}
+
+  protected variable _bpsobj
+  protected variable _context
+
+  protected variable _reply
+  protected variable _resultIdDoc
+  protected variable _resultId
+  protected variable _execProgress
+  protected variable _execAsync
+  protected variable _running false
+  protected variable _execRTStats
+  protected variable _execFlowExceptions
+
+  protected common _tests
+  protected common _rtstatTest
+  protected common _subclasses
+  set _subclasses {}
+
+  protected variable _deviceTypes
+
+  public method _run {cmddoc optvar}
+  public method cancel {}
+  public method wait {}
+
+  public method resultId {}
+
+  public method isPending {} { return [info exists _reply] }
+
+  protected method _testComplete {domnode}
+  protected method _testProgress {domnode}
+  protected method _flowException {domnode}
+  protected method _try {cmd args}
+
+  public proc _testEvent {event bpsobj domnode}
+}
+
+itcl::body bps::ResiliencyBase::constructor {bpsobj args} {
+  set _bpsobj $bpsobj
+  set _context [$_bpsobj _getId]
+
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::ResiliencyBase::destructor {} {
+  if {[info exists _resultId]
+      && [info exists _tests([info class],$_bpsobj,[$_resultId @planid],[$_resultId @host])]} {
+    unset _tests([info class],$_bpsobj,[$_resultId @planid],[$_resultId @host])
+  }
+  if {[info exists _rtstatTest([info class],$_bpsobj)] && $_rtstatTest([info class],$_bpsobj) == [namespace which $this]} {
+    unset _rtstatTest([info class],$_bpsobj)
+  }
+}
+
+itcl::configbody bps::ResiliencyBase::deviceType {
+    if {[lsearch $_deviceTypes $deviceType] == -1} {
+    	error "Invalid device type \"$deviceType\", must be one of: [join $_deviceTypes {, }]"
+    }
+}
+
+itcl::body bps::ResiliencyBase::_run {cmddoc optvar} {
+  upvar $optvar opts
+  # get rid of results from last run now that we're running a new one
+  if {[info exists _resultId]} {
+    if {[info exists _tests([info class],$_bpsobj,[$_resultId @planid],[$_resultId @host])]} {
+      unset _tests([info class],$_bpsobj,[$_resultId @planid],[$_resultId @host])
+    }
+    unset _resultId
+  }
+  if {[info exists _resultIdDoc]} {
+    unset _resultIdDoc
+  }
+  if {[info exists _execProgress]} {
+    unset _execProgress
+  }
+  if {[info exists _execRTStats]} {
+    unset _execRTStats
+  }
+  if {[info exists _execFlowExceptions]} {
+    unset _execFlowExceptions
+  }
+  # have to run from a saved copy
+  set _reply pending
+  if {[catch {
+    set _running true
+    set ret [$_bpsobj _execXml [$cmddoc asXML] "" false]
+    dom parse $ret dom
+    $dom documentElement doc
+    set rid [$doc selectNode testplanid]
+    dom parse [$rid asXML] _resultIdDoc
+    $_resultIdDoc documentElement _resultId
+
+    if {$opts(progress) != ""} {
+      set _execProgress [concat $opts(progress) [list [$rid @name]]]
+    }
+    if {$opts(rtstats) != ""} {
+      set _execRTStats [concat $opts(rtstats) [list [$rid @name]]]
+    }
+    if {$opts(flowexceptions) != ""} {
+      set _execFlowExceptions [concat $opts(flowexceptions) [list [$rid @name]]]
+    }
+  } err]} {
+    global errorCode errorInfo
+    unset _reply
+    set _running false
+    error $err $errorInfo $errorCode
+  }
+  set _tests([info class],$_bpsobj,[$_resultId @planid],[$_resultId @host]) [namespace which $this]
+  set _rtstatTest([info class],$_bpsobj) [namespace which $this]
+  if {$opts(async) != ""} {
+    set _execAsync $opts(async)
+    return
+  }
+  set ret [wait]
+  return $ret
+}
+
+itcl::body bps::ResiliencyBase::cancel {} {
+  if {![info exists _resultId]} { return }
+  dom createDocument cancelTestPlan doc
+  $doc documentElement root
+  $root appendXML [$_resultId asXML]
+  $_bpsobj _execXml [$doc asXML]
+  return
+}
+
+itcl::body bps::ResiliencyBase::wait {} {
+  if {![info exists _reply]} {
+    return
+  }
+  if {$_reply == "pending"} {
+    vwait [itcl::scope _reply]
+  }
+  set ret $_reply
+  unset _reply
+  return $ret
+}
+
+itcl::body bps::ResiliencyBase::resultId {} {
+    if {![info exists _resultId]} {
+        error "No results available"
+    }
+    return [lindex [namespace inscope ::bps::BPSConnection _getTestResultId $_resultId] 0]
+}
+
+itcl::body bps::ResiliencyBase::_testComplete {domnode} {
+  set tm [$domnode selectNodes //testPlanComplete]
+  set all {}
+  foreach test [$tm selectNodes test] {
+    lappend all [$test @name] [$test @result]
+  }
+  set _reply [list [$tm @result] $all]
+  set _running false
+  if {[info exists _execAsync]} {
+    set async $_execAsync
+    unset _execAsync
+    unset _tests([info class],$_bpsobj,[$_resultId @planid],[$_resultId @host])
+    if {[info exists _execProgress]} {
+      unset _execProgress
+    }
+    if {[info exists _rtstatTest([info class],$_bpsobj)] && $_rtstatTest([info class],$_bpsobj) == [namespace which $this]} {
+    		unset _rtstatTest([info class],$_bpsobj)
+    }
+    if {[info exists _execRTStats]} {
+      unset _execRTStats
+    }
+    if {[info exists _execFlowExceptions]} {
+      unset _execFlowExceptions
+    }
+    # do this at the last, in case the callback deletes $this
+    set name [$tm @name]
+    set result [$tm @result]
+	after 1000 [namespace code [concat [list $this _try $async] $name $result $all]]
+  }
+}
+
+itcl::body bps::ResiliencyBase::_testProgress {domnode} {
+  if {[info exists _execProgress]} {
+    set pcent [$domnode @progress 0]
+    _try $_execProgress [expr int($pcent)]
+  }
+}
+
+itcl::body bps::ResiliencyBase::_flowException {domnode} {
+  if {[info exists _execFlowExceptions]} {
+  		set vals {}
+  		foreach attr {component componentType} {
+  		    dict set vals $attr [$domnode @$attr]
+  		}
+  		foreach node [$domnode selectNodes dp/param] {
+  				set value [$node selectNodes child::node()]
+  				if {$value != ""} {
+  						set value [$value asXML]
+  				}
+  		    dict set vals [$node @id] $value
+  		}
+  		_try $_execFlowExceptions $vals
+  }
+}
+
+itcl::body bps::ResiliencyBase::_try {cmd args} {
+  if {[catch {uplevel #0 $cmd $args} err]} {
+    puts stderr "Error executing command \"$cmd $args\": $err"
+  }
+  return
+}
+
+itcl::body bps::ResiliencyBase::_testEvent {event bpsobj domnode} {
+  switch -- $event {
+    chassisState {
+      foreach resultId [$domnode selectNodes //testplanid] {
+        set data [$resultId selectNodes parent::node()]
+        foreach class $_subclasses {
+            if {[info exists _tests($class,$bpsobj,[$resultId @planid],[$resultId @host])]} {
+              $_tests($class,$bpsobj,[$resultId @planid],[$resultId @host]) _testProgress $data
+          }
+        }
+      }
+    }
+    testPlanComplete {
+      set resultId [$domnode selectNodes //testplanid]
+      if {$resultId == ""} return
+      foreach class $_subclasses {
+          if {[info exists _tests($class,$bpsobj,[$resultId @planid],[$resultId @host])]} {
+            $_tests($class,$bpsobj,[$resultId @planid],[$resultId @host]) _testComplete $domnode
+        }
+      }
+    }
+    resiliencyStat {
+        foreach class $_subclasses {
+            if {[info exists bps::ResiliencyBase::_rtstatTest($class,$bpsobj)]} {
+    		    $bps::ResiliencyBase::_rtstatTest($class,$bpsobj) _rtStats $domnode
+    		}
+        }
+    }
+    #flowexception {
+        foreach resultId [$domnode selectNodes //testplanid] {
+            set data [$resultId selectNodes parent::node()]
+            foreach class $_subclasses {
+                if {[info exists _tests($class,$bpsobj,[$resultId @planid],[$resultId @host])]} {
+    		        $bps::ResiliencyBase::_tests($class,$bpsobj,[$resultId @planid],[$resultId @host]) _flowException $data
+    		    }
+    		}
+        }
+    }
+  }
+  return
+}
+
+package provide bps::ResiliencyBase 0.1

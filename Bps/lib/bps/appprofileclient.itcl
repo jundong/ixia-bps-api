@@ -1,0 +1,185 @@
+itcl::class bps::AppProfileClient {
+  inherit bps::Client
+
+  constructor {bpsobj template args} {
+    Client::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _construction 0
+  protected variable _xmldoc
+  protected variable _xmlroot
+
+  public method getSuperflows {}
+  public method addSuperflow {name weight {seed {}}}
+  public method modifySuperflow {name weight {seed {}}}
+  public method removeSuperflow {name}
+
+  public method save {args}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+  protected method _updateXML {args}
+  protected method _createCommand {docvar rootvar command}
+  protected method _makeChange {domdoc}
+}
+
+itcl::body bps::AppProfileClient::constructor {
+	  bpsobj template args} {
+  _createCommand doc root setWorkingAppProfile
+  if {[string compare $template ""] != 0} {
+    $root setAttribute template $template
+  }
+
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  set _construction 1
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+
+  set name [namespace tail $this]
+  $_bpsobj _exec [list workingAppProfileModify -instance $_context \
+                     -name $name]
+  array set _default [list name $name weightType bandwidth]
+
+  configure -name $name -weightType $_default(weightType)
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  set _construction 2
+  return
+}
+
+itcl::body bps::AppProfileClient::destructor {} {
+  if {$_construction >= 1} {
+    catch {$_bpsobj _exec "workingAppProfileForget -instance $_context"}
+  }
+}
+
+itcl::body bps::AppProfileClient::getSuperflows {} {
+  set ret {}
+  foreach sfl [$_xmlroot selectNodes superflow] {
+  	if {[$sfl @generated false]} {
+  			set seed "generated"
+  	} else {
+  			set seed [$sfl @seed]
+  	}
+    lappend ret [$sfl @name] [$sfl @weight] $seed
+  }
+  return $ret
+}
+
+itcl::body bps::AppProfileClient::addSuperflow {name weight {seed {}}} {
+  _createCommand doc root workingAppProfileAddSuperFlow
+  $root appendFromScript {
+    if {$seed != ""} {
+    		if {$seed == "generated"} {
+    				set seed 0
+    		}
+        domNode::add -superflow $name -weight $weight -seed $seed
+    } else {
+        domNode::add -superflow $name -weight $weight
+    }
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AppProfileClient::modifySuperflow {name weight {seed {}}} {
+  _createCommand doc root workingAppProfileModifySuperFlow 
+  $root setAttribute superflow $name
+  if {$weight != ""} {
+     $root setAttribute weight $weight
+  }
+  if {$seed != ""} {
+     $root setAttribute seed $seed
+  }
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AppProfileClient::removeSuperflow {name} {
+  _createCommand doc root workingAppProfileRemoveSuperFlow
+  $root setAttribute superflow $name
+  _makeChange $doc
+  return
+}
+
+itcl::body bps::AppProfileClient::save {args} {
+  set optlist {
+      {name.arg {} "saved app profile name"}
+      {force false "overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+
+  _createCommand doc root workingAppProfileSave
+  if {$opts(force)} {
+  		set opts(force) "true"
+  } else {
+  		set opts(force) "false"
+  }
+  foreach attr {name force} {
+    $root setAttribute $attr $opts($attr)
+  }
+  _makeChange $doc
+}
+
+itcl::body bps::AppProfileClient::_cget {option} {
+  switch -exact -- $option {
+    name {return [$_xmlroot @name]}
+    weightType {return [$_xmlroot @weightType]}
+  }
+  error "Unknown option $option"
+}
+
+itcl::body bps::AppProfileClient::_doConfigChange {args} {
+  _createCommand doc root workingAppProfileModify
+  set changed false
+  foreach {option value} $args {
+    switch -exact -- $option {
+      -name {
+        $root setAttribute name $value
+        set changed true
+      }
+      -weightType {
+        $root setAttribute weightType $value
+        set changed true
+      }
+      default {
+        error "Unknown option $option"
+      }
+    }
+  }
+  if {$changed} {
+  		_makeChange $doc
+  }
+  return
+}
+
+itcl::body bps::AppProfileClient::_updateXML {} {
+  set ret [$_bpsobj _exec [list getWorkingAppProfile -instance $_context]]
+  dom parse $ret _xmldoc
+  $_xmldoc documentElement _xmlroot
+  return
+}
+
+itcl::body bps::AppProfileClient::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+}
+
+itcl::body bps::AppProfileClient::_makeChange {domdoc} {
+  # don't timeout on this call, since recalculating new superflow info can
+  # "legitimately" take ages
+  set ret [$_bpsobj _execXml [$domdoc asXML] {} false]
+  _updateXML
+  return $ret
+}
+
+package provide bps::AppProfileClient 0.1

@@ -1,0 +1,410 @@
+itcl::class bps::LoadProfileClient {
+  inherit bps::Client
+
+  constructor {bpsobj template args} {
+    Client::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _name
+  protected variable _xmldoc
+  protected variable _xmlroot
+  protected variable _isCreate false
+  protected variable _rev 0
+
+  protected common _paramlist
+
+  public method getPhases {}
+  public method addPhase {index args}
+  public method modifyPhase {index args}
+  public method removePhase {index}
+
+  public method save {args}
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+  protected method _createCommand {docvar rootvar command}
+  protected method _makeChange {domdoc}
+  protected method _newstring {domnode text}
+}
+
+array set ::bps::LoadProfileClient::_paramlist {
+  up {
+    duration
+    rampDist.upBehavior
+    sessions.max
+    sessions.maxPerSecond
+    rateDist.scope
+    rateDist.unit
+    rateDist.type
+    rateDist.min
+  }
+  steady {
+    duration
+    rampDist.steadyBehavior
+    sessions.max
+    sessions.maxPerSecond
+    rateDist.scope
+    rateDist.unit
+    rateDist.min
+    rateDist.type
+  }
+  down {
+    duration
+    rampDist.downBehavior
+    sessions.maxPerSecond
+    rateDist.scope
+    rateDist.unit
+    rateDist.min
+    rateDist.type
+    sessions.closeFast
+  }
+}
+
+itcl::body bps::LoadProfileClient::constructor {
+	  bpsobj template args} {
+  _createCommand doc root lookupLoadProfile
+  if {[string compare $template ""] != 0} {
+    $root setAttribute name $template
+  } else {
+    $root setAttribute name {BreakingPoint Default}
+  }
+  set ret [$_bpsobj _execXml [$doc asXML]]
+  dom parse $ret _xmldoc($_rev)
+  $_xmldoc($_rev) documentElement _xmlroot($_rev)
+
+  set _name [$_xmlroot($_rev) @name]
+  array set _default [list name $_name]
+  configure -name [namespace tail $this]
+
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::LoadProfileClient::destructor {} {
+}
+
+itcl::body bps::LoadProfileClient::getPhases {} {
+  set ret {}
+  set count -1
+  foreach item [$_xmlroot($_rev) selectNodes phase] {
+    set info [list duration [$item @duration]]
+    foreach param [$item selectNodes param] {
+      if {[lsearch {rateDist.type
+                    rateDist.max
+                    sessions.closeFast} [$param @id]] != -1} {
+        continue
+      }
+      set content [$param selectNodes child::node()]
+      if {$content != ""} {
+        lappend info [$param @id] [$content asXML]
+      } else {
+        lappend info [$param @id] {}
+      }
+    }
+    lappend ret [incr count] $info
+  }
+  return $ret
+}
+
+itcl::body bps::LoadProfileClient::addPhase {index args} {
+  set newrev [expr $_rev + 1]
+  dom parse [$_xmlroot($_rev) asXML] _xmldoc($newrev)
+  $_xmldoc($newrev) documentElement _xmlroot($newrev)
+
+  # validate
+  if {[catch {
+    set phasecount [llength [$_xmlroot($newrev) selectNodes phase]]
+    if {$index == {} || $index == "end"} {
+      set index [expr $phasecount - 1]
+    }
+
+    if {$index <= 0} {
+      error "Unable to insert a phase before the ramp up"
+    } elseif {$index >= $phasecount} {
+      error "Unable to insert a phase after the ramp down"
+    }
+
+    set type steady
+    set before [$_xmlroot($newrev) selectNodes phase\[[expr $index + 1]\]]
+    if {$before == ""} {
+      error "Unable to insert a phase after the ramp down"
+    }
+
+    dom createDocument phase doc
+    $doc documentElement root
+    $root setAttribute type steady
+    $root setAttribute duration 10
+    $root appendFromScript {
+      domNode::param -id rampDist.steadyBehavior {
+        domNode::text cycle
+      }
+      domNode::param -id sessions.max {
+        domNode::text 1
+      }
+      domNode::param -id sessions.maxPerSecond {
+        domNode::text 1
+      }
+      domNode::param -id sessions.closeFast {
+        domNode::text false
+      }
+      domNode::param -id rateDist.scope {
+        domNode::text per_if
+      }
+      domNode::param -id rateDist.unit {
+        domNode::text mbps
+      }
+      domNode::param -id rateDist.min {
+        domNode::text 1
+      }
+      domNode::param -id rateDist.type {
+        domNode::text constant
+      }
+    }
+
+    foreach {key val} $args {
+      if {![string match -* $key]} {
+        error "Invalid option $key"
+      }
+      set key [string range $key 1 end]
+      if {[lsearch $_paramlist($type) $key] == -1} {
+        set err "Invalid option -$key, must be one of:"
+        foreach param [lsort $_paramlist($type)] {
+          append err \n$param
+        }
+        error $err
+      }
+      if {$key == "duration"} {
+        if {![string is integer -strict $val] || $val <= 0} {
+          error "Invalid duration $val"
+        }
+        $root setAttribute duration $val
+      } else {
+        set current [$root selectNodes "param\[@id = '$key'\]"]
+        if {$current != ""} {
+          $root removeChild $current
+        }
+        $root appendFromScript {
+          domNode::param -id $key {
+            domNode::text $val
+          }
+        }
+      }
+    }
+    $_xmlroot($newrev) insertBefore $root $before
+
+    # validate new phase parameters
+    dom createDocument validateLoadProfile cmddoc
+    $cmddoc documentElement cmdroot
+    $cmdroot appendXML [$_xmlroot($newrev) asXML]
+
+    $_bpsobj _execXml [$cmddoc asXML]
+  } err]} {
+    global errorInfo errorCode
+    unset _xmlroot($newrev)
+    unset _xmldoc($newrev)
+    error $err $errorInfo $errorCode
+  }
+  unset _xmlroot($_rev)
+  unset _xmldoc($_rev)
+  set _rev $newrev
+
+  return
+}
+
+itcl::body bps::LoadProfileClient::modifyPhase {index args} {
+  set newrev [expr $_rev + 1]
+  dom parse [$_xmlroot($_rev) asXML] _xmldoc($newrev)
+  $_xmldoc($newrev) documentElement _xmlroot($newrev)
+
+  if {[catch {
+    set phasecount [llength [$_xmlroot($newrev) selectNodes phase]]
+    if {$index == 0} {
+      set type up
+    } elseif {$index == [expr $phasecount - 1]} {
+      set type down
+    } else {
+      set type steady
+    }
+    if {$index == "end"} {
+      set index [expr $phasecount - 2]
+    }
+    set root [$_xmlroot($newrev) selectNodes phase\[[expr $index + 1]\]]
+    if {$root == ""} {
+      error "Invalid phase $index"
+    }
+
+    foreach {key val} $args {
+      if {![string match -* $key]} {
+        error "Invalid option $key"
+      }
+      set key [string range $key 1 end]
+      if {[lsearch $_paramlist($type) $key] == -1} {
+        set err "Invalid option -$key, must be one of:"
+        foreach param [lsort $_paramlist($type)] {
+          append err \n$param
+        }
+        error $err
+      }
+      if {$key == "duration"} {
+        if {![string is integer -strict $val] || $val <= 0} {
+          error "Invalid duration $val"
+        }
+        $root setAttribute duration $val
+      } else {
+        set current [$root selectNodes "param\[@id = '$key'\]"]
+        if {$current != ""} {
+          $root removeChild $current
+        }
+        $root appendFromScript {
+          domNode::param -id $key {
+            domNode::text $val
+          }
+        }
+      }
+    }
+
+    # validate new phase parameters
+    dom createDocument validateLoadProfile cmddoc
+    $cmddoc documentElement cmdroot
+    $cmdroot appendXML [$_xmlroot($newrev) asXML]
+
+    $_bpsobj _execXml [$cmddoc asXML]
+  } err]} {
+    global errorInfo errorCode
+    unset _xmlroot($newrev)
+    unset _xmldoc($newrev)
+    error $err $errorInfo $errorCode
+  }
+  unset _xmlroot($_rev)
+  unset _xmldoc($_rev)
+  set _rev $newrev
+
+ 
+  return
+}
+
+itcl::body bps::LoadProfileClient::removePhase {index} {
+  if {$index == 0} {
+    error "Unable to delete ramp up phase"
+  }
+  set phasecount [llength [$_xmlroot($_rev) selectNodes phase]]
+  if {$index >= [expr $phasecount - 1]} {
+    error "Unable to delete ramp down phase"
+  }
+  if {$phasecount == 3} {
+    error "You must have at least one ramp up, one ramp steady, and one ramp down"
+  }
+
+  $_xmlroot($_rev) removeChild [$_xmlroot($_rev) selectNodes phase\[[expr $index + 1]\]]
+
+  return
+}
+
+itcl::body bps::LoadProfileClient::save {args} {
+  set optlist {
+      {name.arg {} "saved load profile name"}
+      {force false "overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+
+  if {$opts(name) != ""} {
+  		configure -name $opts(name)
+  }
+  if {$opts(force)} {
+      set opts(force) "true"
+  } else {
+      set opts(force) "false"
+  }
+
+
+  if {$_isCreate} {
+    _createCommand doc root createLoadProfile
+  } else {
+    _createCommand doc root updateLoadProfile
+  }
+  foreach attr {force} {
+    $root setAttribute $attr $opts($attr)
+  }
+  $root appendXML [$_xmldoc($_rev) asXML]
+  _makeChange $doc
+  set _isCreate false
+  return
+}
+
+itcl::body bps::LoadProfileClient::_cget {option} {
+  switch -exact -- $option {
+    name {return $_name}
+  }
+  error "Unknown option $option"
+}
+
+itcl::body bps::LoadProfileClient::_doConfigChange {args} {
+  set newrev [expr $_rev + 1]
+  dom parse [$_xmlroot($_rev) asXML] _xmldoc($newrev)
+  $_xmldoc($newrev) documentElement _xmlroot($newrev)
+
+  if {[catch {
+    foreach {option value} $args {
+      switch -exact -- $option {
+        -name {
+          if {$value != $_name} {
+            set _isCreate true
+          }
+          $_xmlroot($newrev) setAttribute name $value
+          _newstring [$_xmlroot($newrev) selectNodes label] $value
+          set _name $value
+        }
+        default {
+          error "Unknown option $option"
+        }
+      }
+    }
+  } err]} {
+    global errorInfo errorCode
+    unset _xmlroot($newrev)
+    unset _xmldoc($newrev)
+    error $err $errorInfo $errorCode
+  }
+  unset _xmlroot($_rev)
+  unset _xmldoc($_rev)
+  set _rev $newrev
+
+  return
+}
+
+itcl::body bps::LoadProfileClient::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+  #$root setAttribute instance $_context
+}
+
+itcl::body bps::LoadProfileClient::_makeChange {domdoc} {
+  set ret [$_bpsobj _execXml [$domdoc asXML]]
+  if {$ret == ""} return
+  dom parse $ret _xmldoc($_rev)
+  $_xmldoc($_rev) documentElement _xmlroot($_rev)
+  return
+}
+
+itcl::body bps::LoadProfileClient::_newstring {domnode text} {
+  foreach chld [$domnode selectNodes child::node()] {
+    $domnode removeChild $chld
+  }
+  $domnode appendFromScript {
+    domNode::string {
+      domNode::text $text
+    }
+  }
+}
+
+
+package provide bps::LoadProfileClient 0.1

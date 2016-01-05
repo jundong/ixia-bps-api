@@ -1,0 +1,206 @@
+package require Itcl
+package require log
+
+namespace eval model {
+  namespace export componentproxy
+  namespace export declareProxy
+}; # end of namespace installer
+
+
+#
+# This is the parent class for any component's proxy class. This provides a tcl
+# interface for the component that knows what to do underneath to execute the
+# real component wherever it's supposed to go.
+#
+# The point of this is to hide the communication to other devices from the rest
+# of the code.
+#
+
+# attempt to log problems resulting from a failed load of this file - ticket
+# #1462
+if {[itcl::find class model::ComponentProxy] != ""} {
+  puts stderr $errorInfo
+}
+itcl::class model::ComponentProxy {
+  constructor {args} {}
+  destructor {}
+
+  public variable model {}       ;# reference back to the test model
+  protected variable _parameters ;# an instance of datatype struct giving our 
+                                 ;# parameters
+
+  public method member {name}
+
+  public proc parseComponentParams {xmlnode {prefix {}}}
+  public proc parseNetworkParams {xmlnode {prefix {}}}
+  public proc flatComponentParams {xmlnode {prefix {}}}
+  public proc flatNetworkParams {xmlnode {prefix {}}}
+  public proc genDefaults {xmlnode docelem}
+  public proc _genDefaults {xmlnode}
+}
+
+proc model::componentproxy {args} {
+  uplevel model::ComponentProxy $args
+}
+
+itcl::body model::ComponentProxy::constructor {args} {
+  eval configure $args
+}
+
+itcl::body model::ComponentProxy::destructor {} {
+}
+
+itcl::body model::ComponentProxy::member {name} {
+  return [$_parameters member $name]
+}
+
+proc model::declareProxy {namespace attrsarr paramstruct outputs bulks} {
+  model::ProtocolComponentProxy::declareProxy $namespace $attrsarr $paramstruct $outputs $bulks
+}
+
+itcl::body model::ComponentProxy::parseComponentParams {xmlnode {prefix {}}} {
+  set ret {}
+  foreach node [$xmlnode selectNodes child::param] {
+    set nodeid [$node @id]
+    lappend ret $nodeid [$node text]
+  }
+  foreach node [$xmlnode selectNodes "(dynstruct|struct|list)"] {
+    set nodeid [$node @id]
+    lappend ret $nodeid [model::ComponentProxy::parseComponentParams \
+                           $node [concat $prefix $nodeid]]
+  }
+  return $ret
+}
+
+itcl::body model::ComponentProxy::parseNetworkParams {xmlnode {prefix {}}} {
+  set ret {}
+  foreach node [$xmlnode selectNodes child::node()] {
+      switch [$node nodeName] {
+          dynstruct -
+          struct -
+          list {
+              set nodeid [$node @id [$node @name ""]]
+              lappend ret $nodeid [model::ComponentProxy::parseNetworkParams \
+                               $node [concat $prefix $nodeid]]
+          }
+          tags {
+              set nodeid [$node @id [$node @name ""]]
+              set taglist {}
+              foreach tag [$node selectNodes tag/@id] {
+                  lappend taglist [lindex $tag 1]
+              }
+              lappend ret $nodeid $taglist
+          }
+          default {
+              set nodeid [$node @id [$node @name ""]]
+              lappend ret $nodeid [$node text]
+          }
+      }
+  }
+  return $ret
+}
+
+itcl::body model::ComponentProxy::flatComponentParams {xmlnode {prefix {}}} {
+  set ret {}
+  if {$prefix != ""} {
+    set prefix ${prefix}.
+  }
+  foreach node [$xmlnode selectNodes child::param] {
+    set nodeid [$node @id]
+    lappend ret ${prefix}$nodeid [$node text]
+  }
+  foreach node [$xmlnode selectNodes "(dynstruct|struct|list)"] {
+    set nodeid [$node @id]
+    set ret [concat $ret [flatComponentParams $node ${prefix}$nodeid]]
+  }
+  return $ret
+}
+
+itcl::body model::ComponentProxy::flatNetworkParams {xmlnode {prefix {}}} {
+  set ret {}
+  if {$prefix != ""} {
+    set prefix ${prefix}.
+  }
+  foreach node [$xmlnode selectNodes child::node()] {
+      switch [$node nodeName] {
+          dynstruct -
+          struct -
+          list {
+              set nodeid [$node @id [$node @name ""]]
+              set ret [concat $ret [flatNetworkParams $node ${prefix}$nodeid]]
+          }
+          tags {
+              set nodeid [$node @id [$node @name ""]]
+              set taglist {}
+              foreach tag [$node selectNodes tag/@id] {
+                  lappend taglist [lindex $tag 1]
+              }
+              lappend ret ${prefix}$nodeid $taglist
+          }
+          default {
+              set nodeid [$node @id [$node @name ""]]
+              lappend ret ${prefix}$nodeid [$node text]
+          }
+      }
+  }
+  return $ret
+}
+
+itcl::body model::ComponentProxy::genDefaults {node docelem} {
+  dom createDocument $docelem doc
+  $doc documentElement root
+  $root appendFromScript {
+    _genDefaults $node
+  }
+  return [$doc asXML]
+}
+
+itcl::body model::ComponentProxy::_genDefaults {node} {
+  if {$node == ""} return
+  foreach child [$node selectNodes child::*] {
+    if {[$child @enabled true]} {
+	    switch [$child nodeName] {
+	      enum {
+	        if {[$child hasAttribute default]} {
+	          set default [$child @default]
+	          domNode::param -id [$child @name] {
+	            domNode::text $default
+	          }
+	        }
+	      }
+	      string -
+	      file -
+	      filename {
+	        if {[$child hasAttribute default]} {
+	          domNode::param -id [$child @name] {
+	            domNode::text [$child @default ""]
+	          }
+	        }
+	      }
+	      ipv4 {
+	        if {[$child hasAttribute default]} {
+	          domNode::param -id [$child @name] {
+	            domNode::text [$child @default 1.0.0.1]
+	          }
+	        }
+	      }
+	      int -
+	      float -
+	      boolean {
+	        if {[$child hasAttribute default]} {
+	          domNode::param -id [$child @name] {
+	            domNode::text [$child @default 0]
+	          }
+	        }
+	      }
+	      list -
+	      struct {
+	        domNode::struct -id [$child @name] {
+	          _genDefaults [$child selectNodes members]
+	        }
+	      }
+	    }
+	 }
+  }
+}
+

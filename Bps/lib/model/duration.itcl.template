@@ -1,0 +1,51 @@
+package require Itcl
+
+itcl::class %CLASS% {
+  inherit model::Duration
+
+  constructor {args} {}
+  destructor {}
+
+  protected common min %MIN%
+  protected common max %MAX%
+
+  public variable value %DEFAULT%
+  
+   public method numSeconds {val}
+}
+
+itcl::body %CLASS%::constructor {args} {
+  set _type duration
+  foreach arg {itemname} {
+    set cfgix [lsearch $args -$arg]
+    if {$cfgix != -1 && ($cfgix % 2) == 0 && ([llength $args] % 2) == 0} {
+      configure -$arg [lindex $args [expr $cfgix + 1]]
+    }
+  }
+  configure -value "%DEFAULT%"
+  eval configure $args
+  if {![info exists value]} {
+    error "value must be specified" {} RUNTIME_ERROR
+  }
+}
+
+itcl::body %CLASS%::destructor {} {
+}
+
+itcl::configbody %CLASS%::value {
+}
+
+itcl::body %CLASS%::numSeconds {val} {
+   set fields [split $val ":"]
+   set h 0
+   set m 0
+   set s 0
+   foreach field $fields {
+   	  set h $m
+   	  set m $s
+   	  set s $field
+   }
+   return [expr $h * 3600 + $m * 60 + $s]
+}
+
+log::log warn "duration %CLASS% declared"

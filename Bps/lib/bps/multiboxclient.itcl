@@ -1,0 +1,551 @@
+itcl::class bps::MultiBoxClient {
+  inherit bps::Client
+
+  constructor {bpsobj template args} {
+    Client::constructor $bpsobj [$bpsobj _getId]
+  } {}
+  destructor {}
+
+  protected variable _name
+  protected variable _xmldoc
+  protected variable _xmlroot
+  protected variable _rev 0
+  protected variable _reply
+  protected variable _resultIdDoc
+  protected variable _resultId
+  protected variable _execProgress
+  protected variable _execAsync
+  protected variable _running false
+  protected variable _execRTStats
+  protected variable _execFlowExceptions
+  protected variable _saved
+
+  protected common _tests
+  protected common _rtstatTest
+
+  public method getTests {}
+  public method addTest {host username password name dut neighborhood}
+  public method configureTest {host args}
+  public method removeTest {host}
+
+  public method getChassis {host args}
+
+  public method run {args}
+  public method cancel {args}
+  public method wait {}
+  public method save {args}
+
+  public method resultId {}
+
+  public method isPending {} { return [info exists _reply] }
+
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+  protected method _createCommand {docvar rootvar command}
+  protected method _makeChange {domdoc}
+
+  protected method _testComplete {domnode}
+  protected method _testProgress {domnode}
+  protected method _rtStats {domnode}
+  protected method _flowException {domnode}
+  protected method _try {cmd args}
+
+  public proc _testEvent {event bpsobj domnode}
+}
+
+itcl::body bps::MultiBoxClient::constructor {
+	  bpsobj template args} {
+  if {[string compare $template ""] != 0} {
+    _createCommand doc root multiBoxInfo
+    $root setAttribute name $template
+    set ret [$_bpsobj _execXml [$doc asXML]]
+    dom parse $ret _xmldoc($_rev)
+    $_xmldoc($_rev) documentElement _xmlroot($_rev)
+    foreach unwanted {author revision timestamp class} {
+      if {[$_xmlroot($_rev) hasAttribute $unwanted]} {
+        $_xmlroot($_rev) removeAttribute $unwanted
+      }
+    }
+    set _name [$_xmlroot($_rev) @name]
+    array set _default [list name $_name]
+    set _saved true
+  } else {
+    dom createDocument multibox _xmldoc($_rev)
+    $_xmldoc($_rev) documentElement _xmlroot($_rev)
+    set _name [namespace tail $this]
+    array set _default [list name $_name]
+    $_xmlroot($_rev) setAttribute name $_name
+    $_xmlroot($_rev) setAttribute dut {BreakingPoint Default}
+    $_xmlroot($_rev) setAttribute neighborhood {BreakingPoint Switching}
+    $_xmlroot($_rev) setAttribute test AppSim
+    set _saved false
+  }
+
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+  return
+}
+
+itcl::body bps::MultiBoxClient::destructor {} {
+  if {[info exists _resultId]
+  	  && [info exists _tests($_bpsobj,[$_resultId @multiid],[$_resultId @host])]} {
+    unset _tests($_bpsobj,[$_resultId @multiid],[$_resultId @host])
+  }
+  if {[info exists _rtstatTest($_bpsobj)] && $_rtstatTest($_bpsobj) == [namespace which $this]} {
+    unset $_rtstatTest(_bpsobj)
+  }
+}
+
+itcl::body bps::MultiBoxClient::getTests {} {
+  set ret {}
+  set count -1
+  set data [list dut [$_xmlroot($_rev) @dut] \
+                 neighborhood [$_xmlroot($_rev) @neighborhood] \
+                 test [$_xmlroot($_rev) @test]]
+  lappend ret localhost $data
+  foreach item [$_xmlroot($_rev) selectNodes box] {
+    lappend ret [$item @address] [list \
+         dut [$item @dut] \
+         neighborhood [$item @neighborhood] \
+         username [$item @username] \
+         password [$item @password] \
+         test [$item @test] ]
+  }
+  return $ret
+}
+
+itcl::body bps::MultiBoxClient::addTest {host 
+                   username password test dut neighborhood} {
+  set newrev [expr $_rev + 1]
+  dom parse [$_xmlroot($_rev) asXML] _xmldoc($newrev)
+  $_xmldoc($newrev) documentElement _xmlroot($newrev)
+
+  if {[catch {
+    if {$host == "localhost" 
+        || [$_xmlroot($newrev) selectNodes "box\[@address='$host'\]"] != ""} {
+      error "Host $host already present"
+    }
+    # validate new test
+    foreach {cmd id} [list modelInfo $test \
+                           neighborhoodInfo $neighborhood \
+                           dutInfo $dut] {
+      dom createDocument $cmd cmddoc
+      $cmddoc documentElement cmdroot
+      $cmdroot setAttribute name $id
+
+      # make sure the name given references a valid object
+      $_bpsobj _execXml [$cmddoc asXML]
+    }
+
+    dom createDocument box doc
+    $doc documentElement root
+    $root setAttribute address $host
+    foreach attr {
+      username password test dut neighborhood
+    } {
+      $root setAttribute $attr [set $attr]
+    }
+
+    $_xmlroot($newrev) appendChild $root
+  } err]} {
+    global errorInfo errorCode
+    unset _xmlroot($newrev)
+    unset _xmldoc($newrev)
+    error $err $errorInfo $errorCode
+  }
+  unset _xmlroot($_rev)
+  unset _xmldoc($_rev)
+  set _rev $newrev
+
+  return
+}
+
+itcl::body bps::MultiBoxClient::configureTest {host args} {
+  set optlist {
+    {username.arg \0 "username for authentication to remote box"}
+    {password.arg \0 "password for authentication to remote box"}
+    {test.arg \0 "test name"}
+    {dut.arg \0 "DUT name"}
+    {neighborhood.arg \0 "neighborhood name"}
+  }
+  array set opts [cmdline::getoptions args $optlist "configureTest options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "configureTest options:"]
+  }
+
+  set newrev [expr $_rev + 1]
+  dom parse [$_xmlroot($_rev) asXML] _xmldoc($newrev)
+  $_xmldoc($newrev) documentElement _xmlroot($newrev)
+
+
+  if {[catch {
+    if {$host == "localhost"} {
+      set hostnode $_xmlroot($newrev)
+      foreach opt {username password} {
+        if {$opts($opt) != "\0"} {
+          $hostnode setAttribute $opt $opts($opt)
+        }
+      }
+    } else {
+      set hostnode [$_xmlroot($newrev) selectNodes "box\[@address='$host'\]"]
+    }
+    if {$hostnode == ""} {
+      error "Unknown host $host"
+    }
+
+    # validate new info
+    foreach {cmd opt} [list modelInfo test \
+                           neighborhoodInfo neighborhood \
+                           dutInfo dut] {
+      if {$opts($opt) != "\0"} {
+        dom createDocument $cmd cmddoc
+        $cmddoc documentElement cmdroot
+        $cmdroot setAttribute name $opts($opt)
+
+        # make sure the name given references a valid object
+        $_bpsobj _execXml [$cmddoc asXML]
+        $hostnode setAttribute $opt $opts($opt)
+      }
+    }
+  } err]} {
+    global errorInfo errorCode
+    unset _xmlroot($newrev)
+    unset _xmldoc($newrev)
+    error $err $errorInfo $errorCode
+  }
+  unset _xmlroot($_rev)
+  unset _xmldoc($_rev)
+  set _rev $newrev
+
+  return
+}
+
+itcl::body bps::MultiBoxClient::removeTest {host} {
+  set hostnode [$_xmlroot($_rev) selectNodes "box\[@address='$host'\]"]
+  if {$hostnode == ""} {
+    error "Unknown host $host"
+  }
+  $_xmlroot($_rev) removeChild $hostnode
+  return
+}
+
+itcl::body bps::MultiBoxClient::getChassis {host args} {
+  set hostnode [$_xmlroot($_rev) selectNodes "box\[@address='$host'\]"]
+  if {$hostnode == ""} {
+    error "Unknown host $host"
+  }
+  return [uplevel [list bps::ChassisClient #auto $_bpsobj [$hostnode @username] \
+                   $host [$hostnode @username] [$hostnode @password]] $args]
+}
+
+itcl::body bps::MultiBoxClient::run {args} {
+  if {$_running} {
+    error "unable to execute, test is already running"
+  }
+  set optlist {
+    {group.arg    1 "interface group to use"}
+    {async.arg    {} "return immediately, then call the given script upon completion"}
+    {progress.arg {} "script to run with progress notifications"}
+    {rtstats.arg {} "script to run with rtstats notifications"}
+    {flowexceptions.arg {} "script to run with flow exception notifications"}
+    {allowMalware "confirm that malware should be allowed in this test"}
+  }
+  array set opts [cmdline::getoptions args $optlist "run options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "run options:"]
+  }
+  if {!$_saved} {
+    error "A multibox test must be saved in order to run"
+  }
+  # get rid of results from last run now that we're running a new one
+  if {[info exists _resultId]} {
+  	if {[info exists _tests($_bpsobj,[$_resultId @multiid],[$_resultId @host])]} {
+        unset _tests($_bpsobj,[$_resultId @multiid],[$_resultId @host])
+    }
+    unset _resultId
+  }
+  if {[info exists _resultIdDoc]} {
+    unset _resultIdDoc
+  }
+  if {[info exists _execProgress]} {
+    unset _execProgress
+  }
+  if {[info exists _execRTStats]} {
+    unset _execRTStats
+  }
+  if {[info exists _execFlowExceptions]} {
+    unset _execFlowExceptions
+  }
+  # have to run from a saved copy
+  set _reply pending
+  if {[catch {
+    dom createDocument executeMultiBox doc
+    $doc documentElement root
+    $root setAttribute name $_name
+    $root setAttribute group $opts(group)
+    $root setAttribute allowMalware $opts(allowMalware)
+    set _running true
+    set ret [$_bpsobj _execXml [$doc asXML] "" false]
+    dom parse $ret dom
+    $dom documentElement doc
+    set rid [$doc selectNode multiboxid]
+    dom parse [$rid asXML] _resultIdDoc
+    $_resultIdDoc documentElement _resultId
+
+    if {$opts(progress) != ""} {
+      set _execProgress [concat $opts(progress) [list [$rid @name]]]
+    }
+    if {$opts(rtstats) != ""} {
+      set _execRTStats [concat $opts(rtstats) [list [$rid @name]]]
+    }
+    if {$opts(flowexceptions) != ""} {
+      set _execFlowExceptions [concat $opts(flowexceptions) [list [$rid @name]]]
+    }
+  } err]} {
+    global errorCode errorInfo
+    unset _reply
+    set _running false
+    error $err $errorInfo $errorCode
+  }
+  set _tests($_bpsobj,[$_resultId @multiid],[$_resultId @host]) [namespace which $this]
+  set _rtstatTest($_bpsobj) [namespace which $this]
+  if {$opts(async) != ""} {
+    set _execAsync $opts(async)
+    return
+  }
+  set ret [wait]
+  return $ret
+}
+
+itcl::body bps::MultiBoxClient::cancel {args} {
+  set optlist {
+      {force "abort cleanup operations"}
+  }
+  array set opts [cmdline::getoptions args $optlist "cancel options:"]
+  if {![info exists _resultId]} { return }
+  dom createDocument cancelMultiBox doc
+  $doc documentElement root
+  $root appendXML [$_resultId asXML]
+  if {$opts(force)} {
+    $root setAttribute force true
+  }
+  $_bpsobj _execXml [$doc asXML]
+  return
+}
+
+itcl::body bps::MultiBoxClient::wait {} {
+  if {![info exists _reply]} {
+    return
+  }
+  if {$_reply == "pending"} {
+    vwait [itcl::scope _reply]
+  }
+  set ret $_reply
+  unset _reply
+  return $ret
+}
+
+itcl::body bps::MultiBoxClient::save {args} {
+  set optlist {
+      {name.arg {} "saved load profile name"}
+      {force false "overwrite"}
+  }
+  array set opts [cmdline::getoptions args $optlist "save options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "save options:"]
+  }
+
+  if {$opts(name) != ""} {
+  		configure -name $opts(name)
+  }
+
+  _createCommand doc root multiBoxSave
+  if {$opts(force)} {
+  		set opts(force) "true"
+  } else {
+  		set opts(force) "false"
+  }
+  foreach attr {force} {
+    $root setAttribute $attr $opts($attr)
+  }
+  $root appendXML [$_xmldoc($_rev) asXML]
+  _makeChange $doc
+  set _saved true
+  return
+}
+
+itcl::body bps::MultiBoxClient::resultId {} {
+    if {![info exists _resultId]} {
+        error "No results available"
+    }
+    return [lindex [namespace inscope ::bps::BPSConnection _getTestResultId $_resultId] 0]
+}
+
+itcl::body bps::MultiBoxClient::_cget {option} {
+  switch -exact -- $option {
+    name {return $_name}
+  }
+  error "Unknown option $option"
+}
+
+itcl::body bps::MultiBoxClient::_doConfigChange {args} {
+  set newrev [expr $_rev + 1]
+  dom parse [$_xmlroot($_rev) asXML] _xmldoc($newrev)
+  $_xmldoc($newrev) documentElement _xmlroot($newrev)
+
+  if {[catch {
+    foreach {option value} $args {
+      switch -exact -- $option {
+        -name {
+          if {$value != $_name} {
+            set _saved false
+          }
+          $_xmlroot($newrev) setAttribute name $value
+          set _name $value
+        }
+        default {
+          error "Unknown option $option"
+        }
+      }
+    }
+  } err]} {
+    global errorInfo errorCode
+    unset _xmlroot($newrev)
+    unset _xmldoc($newrev)
+    error $err $errorInfo $errorCode
+  }
+  unset _xmlroot($_rev)
+  unset _xmldoc($_rev)
+  set _rev $newrev
+
+  return
+}
+
+itcl::body bps::MultiBoxClient::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+  #$root setAttribute instance $_context
+}
+
+itcl::body bps::MultiBoxClient::_makeChange {domdoc} {
+  set ret [$_bpsobj _execXml [$domdoc asXML]]
+  #dom parse $ret _xmldoc($_rev)
+  #$_xmldoc($_rev) documentElement _xmlroot($_rev)
+  return $ret
+}
+
+itcl::body bps::MultiBoxClient::_testComplete {domnode} {
+  set node [$domnode selectNodes //multiBoxTestComplete]
+  if {$node == ""} return
+  set _reply [$node @result]
+  set _running false
+  if {[info exists _execAsync]} {
+    set async $_execAsync
+    unset _execAsync
+    unset _tests($_bpsobj,[$_resultId @multiid],[$_resultId @host])
+    if {[info exists _execProgress]} {
+      unset _execProgress
+    }
+    if {[info exists _rtstatTest($_bpsobj)] && $_rtstatTest($_bpsobj) == [namespace which $this]} {
+    		unset _rtstatTest($_bpsobj)
+    }
+    if {[info exists _execRTStats]} {
+      unset _execRTStats
+    }
+    if {[info exists _execFlowExceptions]} {
+      unset _execFlowExceptions
+    }
+    # do this at the last, in case the callback deletes $this
+    set name [$_resultId @name]
+    set result [$node @result]
+	after 1000 [namespace code [concat [list $this _try $async] $name $result]]
+  }
+}
+
+itcl::body bps::MultiBoxClient::_testProgress {domnode} {
+  if {[info exists _execProgress]} {
+    set pcent [$domnode @progress 0]
+    _try $_execProgress [expr int($pcent)]
+  }
+}
+
+itcl::body bps::MultiBoxClient::_rtStats {domnode} {
+  if {[info exists _execRTStats]} {
+  		dict set values progress [$domnode @progress 0]
+  		dict set values time [$domnode @time 0]
+  		dict set values t [$domnode @t 0]
+  		set vals [$domnode selectNodes values/child::node()]
+  		if {$vals != ""} {
+  				set vals [$vals asXML]
+  		}
+  		while {[regexp {(\w+)='([^']*)' (.*$)} $vals junk var val vals]} {
+  			 dict set values $var $val
+  		}
+
+  		_try $_execRTStats $values
+  }
+}
+
+itcl::body bps::MultiBoxClient::_flowException {domnode} {
+  if {[info exists _execFlowExceptions]} {
+  		set vals {}
+  		foreach attr {component componentType} {
+  		    dict set vals $attr [$domnode @$attr]
+  		}
+  		foreach node [$domnode selectNodes dp/param] {
+  				set value [$node selectNodes child::node()]
+  				if {$value != ""} {
+  						set value [$value asXML]
+  				}
+  		    dict set vals [$node @id] $value
+  		}
+  		_try $_execFlowExceptions $vals
+  }
+}
+
+itcl::body bps::MultiBoxClient::_try {cmd args} {
+  if {[catch {uplevel #0 $cmd $args} err]} {
+    puts stderr "Error executing command \"$cmd $args\": $err"
+  }
+  return
+}
+
+itcl::body bps::MultiBoxClient::_testEvent {event bpsobj domnode} {
+  switch -- $event {
+    chassisState {
+      foreach resultId [$domnode selectNodes //multiboxid] {
+        set data [$resultId selectNodes parent::node()]
+        if {[info exists _tests($bpsobj,[$resultId @multiid],[$resultId @host])]} {
+          $_tests($bpsobj,[$resultId @multiid],[$resultId @host]) _testProgress $data
+        }
+      }
+    }
+    multiBoxTestComplete {
+      set resultId [$domnode selectNodes //multiboxid]
+      if {$resultId == ""} return
+      if {[info exists _tests($bpsobj,[$resultId @multiid],[$resultId @host])]} {
+        $_tests($bpsobj,[$resultId @multiid],[$resultId @host]) _testComplete $domnode
+      }
+    }
+    #rtstats {
+        if {[info exists bps::MultiBoxClient::_rtstatTest($bpsobj)]} {
+    		    $bps::MultiBoxClient::_rtstatTest($bpsobj) _rtStats $domnode
+        }
+    }
+    #flowexception {
+        foreach resultId [$domnode selectNodes //multiid] {
+            set data [$resultId selectNodes parent::node()]
+            if {[info exists _tests($bpsobj,[$resultId @multiid],[$resultId @host])]} {
+    		        $bps::MultiBoxClient::_tests($bpsobj,[$resultId @multiid],[$resultId @host]) _flowException $data
+    		    }
+        }
+    }
+  }
+  return
+}
+
+package provide bps::MultiBoxClient 0.1

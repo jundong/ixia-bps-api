@@ -1,0 +1,155 @@
+itcl::class bps::DeviceClient {
+  inherit bps::Client
+
+  constructor {bpsobj context args} {
+    Client::constructor $bpsobj $context
+  } {}
+  destructor {}
+
+  public method save {args}
+
+  public method addCommand {event command args}
+  public method removeCommand {event {index end}}
+
+  protected variable _optionCache
+  protected variable _extraparams
+  protected variable _optionCacheTime
+
+  protected method _getVars {root}
+  protected method _cget {option}
+  protected method _doConfigChange {args}
+}
+
+itcl::body bps::DeviceClient::constructor {bpsobj context args} {
+  if {[llength $args] > 0} {
+    # take config overrides from args
+    eval configure $args
+  }
+
+  dom parse [$_bpsobj _exec [list setWorkingDut -instance $_context]] doc
+  $doc documentElement root
+  _getVars $root
+  array set _default [array get _optionCache]
+}
+
+itcl::body bps::DeviceClient::destructor {} {
+  $_bpsobj _exec [list workingDutForget -instance $_context]
+}
+
+itcl::body bps::DeviceClient::save {args} {
+  $_bpsobj _exec [concat workingDutSave -instance $_context $args]
+}
+
+itcl::body bps::DeviceClient::addCommand {event command args} {
+  dom createDocument workingDutAddCommand doc
+  $doc documentElement root
+  $root setAttribute instance $_context
+  $root setAttribute event $event
+  $root setAttribute command $command
+  $root appendFromScript {
+    foreach arg $args {
+      domNode::param {
+        domNode::text $arg
+      }
+    }
+  }
+  $_bpsobj _execXml [$doc asXML]
+}
+
+itcl::body bps::DeviceClient::removeCommand {event {index end}} {
+  if {$index == "end"} {
+    set index -1
+  }
+  $_bpsobj _exec [list workingDutRemoveCommand -instance $_context \
+                 -event $event -index $index]
+}
+
+itcl::body bps::DeviceClient::_getVars {root} {
+  if {![info exists _optionCache] ||
+      [clock seconds] > $_optionCacheTime + 20} {
+    if {[info exists _optionCache]} {
+      unset _optionCache
+    }
+    set _optionCacheTime [clock seconds]
+
+    set _optionCache(name) [$root @name]
+    set _optionCache(devicetype) [$root @devicetype RControl]
+    set _optionCache(description) [[$root selectNodes \
+                           description/*/child::node()] asXML]
+    set _optionCache(period) [[$root selectNodes \
+                           commands\[@event='periodic'\]] @period 30]
+
+    set conn [$root selectNodes connection]
+    set _optionCache(connectiontype) [$conn @type serial]
+    foreach {var default} {
+      login ""
+      password ""
+      handshake none
+      speed 38400
+      databits 8
+      parity n
+      stopbits 1
+      port 0
+      host "0.0.0.0"
+    } {
+      set _optionCache($var) [$conn @$var $default]
+    }
+
+    foreach param [array names _extraparams] {
+      unset _default($param)
+    }
+    if {[info exists _extraparams]} {
+      unset _extraparams
+    }
+    set plist [dict get [$_bpsobj deviceTypes] $_optionCache(devicetype) params]
+    foreach {id label} $plist {
+      set _default($id) ""
+      set _extraparams($id) ""
+    }
+
+    foreach param [$root selectNodes param] {
+      set _extraparams([$param @id]) [$param text]
+    }
+  }
+}
+
+itcl::body bps::DeviceClient::_cget {option} {
+  dom parse [$_bpsobj _exec [list getWorkingDut -instance $_context]] doc
+  $doc documentElement root
+  _getVars $root
+  if {[info exists _optionCache($option)]} {
+    return $_optionCache($option)
+  }
+  if {[info exists _extraparams($option)]} {
+    return $_extraparams($option)
+  }
+  error "invalid option $option"
+}
+
+itcl::body bps::DeviceClient::_doConfigChange {args} {
+  if {[llength $args] %2 != 0} {
+    error "option [lindex $args end] is missing a value"
+  }
+  set optionlist {}
+  set arglist {}
+  foreach {option val} $args {
+    if {![string match -* $option]} {
+      error "invalid format, must be -key"
+    }
+    set option [string range $option 1 end]
+    if {[lsearch [array names _extraparams] $option] != -1} {
+      append arglist "<param id='$option'>$val</param>"
+    } else {
+      lappend optionlist ${option}='$val'
+    }
+  }
+  $_bpsobj _execXml "<workingDutModify instance='$_context' \
+  $optionlist>$arglist</workingDutModify>"
+  set _optionCacheTime 0
+  dom parse [$_bpsobj _exec [list getWorkingDut -instance $_context]] doc
+  $doc documentElement root
+  _getVars $root
+  return
+}
+
+package provide bps::DeviceClient 0.1

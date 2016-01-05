@@ -1,0 +1,1642 @@
+package require http
+
+itcl::class bps::ChassisClient {
+  constructor {bpsobj userid host username password args} {}
+  destructor {}
+
+  public variable onstate {}
+  public variable onreserve {}
+  public variable onlink {}
+  public variable onclose {}
+  public variable ontest {}
+  public variable ontestprogress {}
+  public variable onsystemerror {}
+  public variable onexpunge {}
+  public variable ondiskusage {}
+
+  public method getTests {}
+  public method cancelTest {testid}
+  public method getState {}
+  public method reservePort {slot port args}
+  public method unreservePort {slot port}
+  public method setPortOrder {args}
+  public method configurePort {slot port args}
+  public method setNote {slot port note}
+
+  protected method _isPerfectStorm {slot}
+  protected method _getCardType {slot}
+  protected method _waitForCard {slot}
+  public method getCardMode {slot}
+  public method getCardState {slot}
+  public method rebootCard {slot}
+  public method setCardModeBPS {slot}
+  public method setCardModeBPS_L23 {slot}
+  public method setCardModeIxLoad {slot}
+  public method PS100G_FanOut {slot fanid}
+  public method PS40G_FanOut {slot {fanout true}}
+  public method PS10G_setSpeed {slot {speed 10G}}
+
+  public method packetTraceStatus {}
+  public method exportPacketTrace {dir args}
+  public method getDiags {args}
+  public method getResourceAllocation {args}
+  public method wait {}
+
+  public method expungeDB {args}
+
+  public method getSystemErrorLog {}
+
+  protected common _client
+  protected common _exportobjs
+
+  protected variable _bpsobj
+  protected variable _construction 0
+  protected variable _xmldoc
+  protected variable _xmlroot
+  protected variable _userid
+  protected variable _host
+  protected variable _closed false
+  protected variable _execProgress
+  protected variable _execAsync
+  protected variable _reply
+  protected variable _export
+  protected variable _exportArgs
+  protected variable _exportReplies
+  protected variable _exportChannel
+  protected variable _exportComplete
+  protected variable _exportFiles
+
+  protected method _createCommand {docvar rootvar command}
+
+  protected method _try {cmd args}
+  protected method _handleNotify {event domnode}
+  protected method _handlePTraceNotify {event domnode}
+  protected method _handlePTraceDownloadProgress {token total current}
+  protected method _handlePTraceDownloadComplete {filename token}
+  protected method _handleSystemError {event bpsobj domnode}
+  protected method _handleTestEvent {event bpsobj domnode}
+
+  protected method _updateXML {args}
+  protected method _makeChange {domdoc}
+  protected method _validatePortArgs {auto speed fullduplex ignorepause capture force}
+
+  protected proc _addClient {bpsobj host username password obj}
+  protected proc _removeClient {bpsobj host obj}
+  public proc _stateChange {event bpsobj domnode}
+  public proc _ptraceEvent {event bpsobj domnode}
+  public proc _systemError {event bpsobj domnode}
+  public proc _testEvent {event bpsobj domnode}
+}
+
+itcl::body bps::ChassisClient::constructor {
+	  bpsobj userid host username password args} {
+  set _bpsobj $bpsobj
+  set _userid $userid
+  if {$host == [$_bpsobj host]} {
+    set _host localhost
+  } else {
+    set _host $host
+  }
+  if {[catch {
+    _createCommand doc root getChassisState
+    if {$_host != "localhost"} {
+        $root setAttribute host $_host
+    }
+
+    set ret [$_bpsobj _execXml [$doc asXML]]
+    set _construction 1
+    dom parse $ret _xmldoc
+    $_xmldoc documentElement _xmlroot
+
+    array set _default {}
+
+    if {[llength $args] > 0} {
+      # take config overrides from args
+      eval configure $args
+    }
+
+    _addClient $_bpsobj $_host $username $password [namespace which $this]
+
+    set _construction 2
+  } err]} {
+    global errorInfo errorCode
+    _removeClient $_bpsobj $_host [namespace which $this]
+    error $err $errorInfo $errorCode
+  }
+  return
+}
+
+itcl::body bps::ChassisClient::destructor {} {
+  if {!$_closed} {
+    _removeClient $_bpsobj $_host [namespace which $this]
+  }
+  if {[info exists _export] && 
+  		    [info exists _exportobjs($_export)]} {
+  		unset _exportobjs($_export)
+  }
+  foreach {tok chan} [array get _exportChannel] {
+  		http::cleanup $tok
+  		close $chan
+  }
+}
+
+itcl::body bps::ChassisClient::getTests {} {
+  set ret {}
+  foreach test [$_xmlroot selectNodes runningTest] {
+  	  set idnode [$test selectNodes {child::node()[1]}]
+  	  foreach {idstring type id name} [namespace inscope ::bps::BPSConnection \
+  	               _getTestResultId $idnode] break
+      dict set ret $idstring {}
+      dict set ret $idstring type $type
+      dict set ret $idstring id $id
+      dict set ret $idstring name $name
+      dict set ret $idstring state [$test @state]
+      dict set ret $idstring initProgress [$test @initProgress 0]
+      dict set ret $idstring progress [$test @progress 0]
+      dict set ret $idstring user [$test @user ""]
+      set ports {}
+      foreach portnode [$test selectNodes port] {
+      	  lappend ports [list slot [$portnode @slot] port [$portnode @port]]
+      }
+      dict set ret $idstring ports $ports
+  }
+  return $ret
+}
+
+itcl::body bps::ChassisClient::cancelTest {testid} {
+  set type [lindex [split $testid "@"] 0]
+  switch -exact $type {
+      test {
+        set rootnode cancelTestModel
+      }
+      testSeries {
+        set rootnode cancelTestPlan
+          set node testplanid
+          set idattr planid
+      }
+      multiBoxTest {
+        set rootnode cancelMultiBox
+      }
+      default {
+          error "Invalid test result ID \"$testid\""
+      }
+  }
+  dom createDocument $rootnode doc
+  $doc documentElement root
+  $root appendFromScript {
+    bps::BPSConnection::_appendTestResultId $testid
+  }
+
+  $_bpsobj _execXml [$doc asXML]
+  return
+}
+
+itcl::body bps::ChassisClient::getState {} {
+  set ret {}
+  foreach attr [$_xmlroot attributes] {
+    set val [$_xmlroot @$attr]
+    if {$attr == "model"} {
+        set val [string map {elite ctm nitro firestorm} $val]
+    }
+    dict set ret $attr $val
+  }
+  foreach slot [$_xmlroot selectNodes slot] {
+    dict set ret [$slot @id] {}
+    if {$_closed} {
+      dict set ret [$slot @id] state disconnected
+    } else {
+      foreach attr [$slot attributes] {
+          set val [$slot @$attr]
+          if {$attr == "model"} {
+              set val [string map {elite ctm nitro firestorm} $val]
+          }
+          dict set ret [$slot @id] $attr $val
+      }
+      foreach interface [$slot selectNodes interface] {
+        dict set ret [$slot @id] [$interface @id] {}
+        foreach attr [$interface attributes] {
+          if {$attr == "mtu"} continue
+          set val [$interface @$attr]
+          if {$attr == "model"} {
+              set val [string map {elite ctm nitro firestorm} $val]
+          }
+          dict set ret [$slot @id] [$interface @id] $attr $val
+        }
+        set reservedSettings [$interface selectNodes reservedLinkSettings]
+        if {$reservedSettings != ""} {
+            foreach attr [$reservedSettings attributes] {
+                set val [$reservedSettings @$attr]
+                dict set ret [$slot @id] [$interface @id] $attr $val
+            }
+        }
+        set note [$interface selectNodes note/child::node()]
+        if {$note != ""} {
+        		set note [$note asXML]
+        }
+        dict set ret [$slot @id] [$interface @id] note $note
+      }
+    }
+  }
+  return $ret
+}
+
+itcl::body bps::ChassisClient::reservePort {slot port args} {
+  set optlist {
+    {group.arg 1 "group id"}
+    {auto.arg \0 "auto negotiate port settings"}
+    {speed.arg \0 "port speed"}
+    {fullduplex.arg \0 "full duplex"}
+    {number.arg \0 "logical interface number"}
+    {ignorepause.arg \0 "ignore pause frames"}
+    {capture.arg \0 "enable packet capture"}
+	{force.arg \0 "force port reservation"}
+    {mtu.arg \0 "deprecated"}
+  }
+  array set opts [cmdline::getoptions args $optlist "reservePort options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "reservePort options:"]
+  }
+
+  if {![string is integer -strict $slot] || $slot < 0} {
+    error "Invalid slot $opts(slot); must be an integer >= 0"
+  }
+
+  if {![string is integer -strict $port] || $port < 0} {
+    error "Invalid port $opts(port); must be an integer >= 0"
+  }
+
+  if {![string is integer -strict $opts(group)] || $opts(group) <= 0} {
+    error "Invalid group $opts(group); must be an integer > 0"
+  }
+
+  if {$opts(number) != "\0" && $opts(number) != ""
+      && (![string is integer -strict $opts(number)] || $opts(number) <= 0)} {
+    error "Invalid number $opts(number); must be an integer > 0"
+  }
+
+  if {$opts(mtu) != "\0" && $opts(mtu) != ""} {
+      puts "Deprecated option -mtu used. It will have no effect."
+  }
+
+
+  if {$_closed} {
+    error "connection is closed"
+  }
+
+  _validatePortArgs $opts(auto) $opts(speed) $opts(fullduplex) \
+          $opts(ignorepause) $opts(capture) $opts(force)
+
+  _createCommand doc root reservePorts
+  if {$_host != "localhost"} {
+    $root setAttribute host $_host
+  }
+  $root appendFromScript {
+    set cmd [list domNode::reservation -slot $slot \
+                         -port $port \
+                         -group $opts(group)]
+    foreach opt {auto speed fullduplex number ignorepause capture} {
+      if {$opts($opt) != "\0" && $opts($opt) != ""} {
+        lappend cmd -$opt $opts($opt)
+      }
+    }
+
+	if {$opts(force) == "true"} {
+		$root setAttribute force $opts(force)
+	}
+
+    eval $cmd
+  }
+  _makeChange $doc
+}
+
+itcl::body bps::ChassisClient::unreservePort {slot port} {
+  if {$_closed} {
+    error "connection is closed"
+  }
+
+  _createCommand doc root unReservePort
+  if {$_host != "localhost"} {
+    $root setAttribute host $_host
+  }
+  $root setAttribute slot $slot
+  $root setAttribute port $port
+  _makeChange $doc
+}
+
+itcl::body bps::ChassisClient::setPortOrder {args} {
+  if {$_closed} {
+    error "connection is closed"
+  }
+  _createCommand doc root changeReservations
+  set ix 0
+  $root appendFromScript {
+      foreach {slot port} $args {
+          set thisport [$_xmlroot selectNodes "slot\[@id='$slot'\]/interface\[@id='$port'\]"]
+          if {$thisport == ""} {
+            error "Invalid port: slot $slot port $port"
+          }
+          if {![$thisport hasAttribute group] \
+          	  || [$thisport @reservedBy ""] != $_userid} {
+            error "Port is not reserved: slot $slot port $port"
+          }
+          if {![info exists group]} {
+          		set group [$thisport @group]
+          } elseif {$group != [$thisport @group]} {
+          		error "Unable to mix ports from different groups"
+          }
+          domNode::reservation -number [incr ix] \
+              -slot $slot -port $port \
+              -group $group
+      }
+  }
+  _makeChange $doc
+}
+
+itcl::body bps::ChassisClient::configurePort {slot port args} {
+  if {$_closed} {
+    error "connection is closed"
+  }
+
+  set thisport [$_xmlroot selectNodes "slot\[@id='$slot'\]/interface\[@id='$port'\]"]
+  if {$thisport == ""} {
+    error "Invalid port: slot $slot port $port"
+  }
+  set cfgnode [$thisport selectNodes reservedLinkSettings]
+
+  if {[llength $args] == 0} {
+    if {$cfgnode == ""} {
+      return
+    }
+    set ret {}
+    foreach val {auto speed fullduplex ignorepause capture} {
+      if {[$cfgnode hasAttribute $val]} {
+        lappend ret -$val [$cfgnode @$val]
+      }
+    }
+    return $ret
+  }
+  set optlist {
+    {auto.arg \0 "auto negotiate port settings"} \
+    {fullduplex.arg \0 "full duplex"} \
+    {speed.arg \0 "port speed"} \
+    {ignorepause.arg \0 "ignore pause frames"}
+    {capture.arg \0 "enable packet capture"}
+	{force.arg \0 "force port operation"}
+  }
+  
+  array set opts [cmdline::getoptions args $optlist "configurePort options:"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "configurePort options:"]
+  }
+
+  _validatePortArgs $opts(auto) $opts(speed) $opts(fullduplex) \
+                    $opts(ignorepause) $opts(capture) $opts(force)
+
+  if {![$thisport hasAttribute reservedBy]} {
+    error "Unable to configure port not reserved by $_userid"
+  }
+  if {[$thisport @reservedBy {}] != $_userid} {
+    error "Unable to configure port reserved by [$thisport @reservedBy]"
+  }
+
+  _createCommand doc root reservePorts
+  if {$_host != "localhost"} {
+    $root setAttribute host $_host
+  }
+  set reserveNeeded false
+  $root appendFromScript {
+    set cmd [list domNode::reservation -slot $slot \
+                         -port $port \
+                         -group [$thisport @group]]
+    foreach opt {ignorepause} {
+      if {$opts($opt) == "\0"} {
+        if {[$cfgnode hasAttribute $opt]} {
+          lappend cmd -$opt [$cfgnode @$opt]
+        }
+      } elseif {$opts($opt) != {}} {
+        set reserveNeeded true
+        lappend cmd -$opt $opts($opt)
+      }
+    }
+    foreach opt {auto speed fullduplex capture} {
+      if {$opts($opt) != {} && $opts($opt) != "\0"} {
+        set reserveNeeded true
+        lappend cmd -$opt $opts($opt)
+      }
+    }
+    eval $cmd
+  }
+  if {$reserveNeeded} {
+    _makeChange $doc
+  }
+}
+
+itcl::body bps::ChassisClient::setNote {slot port note} {
+  _createCommand doc root setNote
+  if {$_host != "localhost"} {
+    $root setAttribute host $_host
+  }
+  $root setAttribute slot $slot
+  $root setAttribute port $port
+  if {$note != ""} {
+      $root setAttribute note $note
+  }
+  _makeChange $doc
+}
+
+itcl::body bps::ChassisClient::_isPerfectStorm {slot} {
+
+    if { [catch {_updateXML} ret] } {
+        error $ret
+    }
+
+    set doc [dom parse $ret]
+
+    foreach chassisState [$doc selectNodes chassisState] {
+        foreach slot_num [$chassisState selectNodes slot] {
+            #HACK! for BPS-Only cards. No opmode available for those cards.
+            set opmode_val 7
+            foreach attr [$slot_num attributes] {
+                switch -- $attr {
+                    id {
+                        set id_val [$slot_num @$attr]
+                    }
+                    model {
+                        set model_val [$slot_num @$attr]
+                    }
+                    opmode {
+                        set opmode_val [$slot_num @$attr]
+                    }
+                    state {
+                        set state_val [$slot_num @$attr]
+                    }
+                }
+            }
+            if {$id_val == $slot} {
+                if {$state_val == "ok"} {
+                    set isPerfectStorm [string equal -length 12 PerfectStorm $model_val]
+                    return $isPerfectStorm
+                } else {
+                    error "Slot $slot is $state_val"
+                }
+            }
+        }
+        #Invalid Slot or Slot infomation not available
+    }
+
+    #Raise Error
+    error "Invalid Slot $slot"
+}
+
+itcl::body bps::ChassisClient::_getCardType {slot} {
+
+    if { [catch {_updateXML} ret] } {
+        error $ret
+    }
+
+    set doc [dom parse $ret]
+
+    foreach chassisState [$doc selectNodes chassisState] {
+        foreach slot_num [$chassisState selectNodes slot] {
+            foreach attr [$slot_num attributes] {
+                switch -- $attr {
+                    id {
+                        set id_val [$slot_num @$attr]
+                    }
+                    model {
+                        set model_val [$slot_num @$attr]
+                    }
+                    state {
+                        set state_val [$slot_num @$attr]
+                    }
+                }
+            }
+            if {$id_val == $slot} {
+                if {$state_val == "ok"} {
+                    return $model_val
+                } else {
+                    error "Slot $slot is $state_val"
+                }
+            }
+        }
+        #Invalid Slot or Slot infomation not available
+    }
+
+    #Raise Error
+    error "Invalid Slot $slot"
+}
+
+itcl::body bps::ChassisClient::_waitForCard {slot} {
+    # Will wait for total 10 minutes to up and running
+    set ret "unknown"
+    set now [clock microseconds]
+    set timeout [expr $now + 600000000]
+
+    # CR1329761 & CR1323756
+    # May be we are trying to fetch the card state
+    # before last command started taking action.
+    # So wait for 30 sec.
+    after [expr {int(30 * 1000)}]
+
+    while {$ret != "ok" && $now <= $timeout} {
+        if { [catch {getCardState $slot} ret] } {
+            error $ret
+        }
+        set now [clock microseconds]
+    }
+
+    if {$now > $timeout} {
+        error "Command Timeout. Slot $slot is $ret"
+    } else {
+        return $ret
+    }
+}
+
+itcl::body bps::ChassisClient::getCardMode {slot} {
+
+    if { [catch {_updateXML} ret] } {
+        error $ret
+    }
+
+    set doc [dom parse $ret]
+
+    foreach chassisState [$doc selectNodes chassisState] {
+        foreach slot_num [$chassisState selectNodes slot] {
+            #HACK! for BPS-Only cards. No opmode available for those cards.
+            set opmode_val 7
+            foreach attr [$slot_num attributes] {
+                switch -- $attr {
+                    id {
+                        set id_val [$slot_num @$attr]
+                    }
+                    opmode {
+                        set opmode_val [$slot_num @$attr]
+                    }
+                    state {
+                        set state_val [$slot_num @$attr]
+                    }
+                }
+            }
+            if {$id_val == $slot} {
+                if {$state_val != "empty"} {
+                    switch -- $opmode_val {
+                        0 {
+                            #return "Live-Oak"
+                            return "unknown"
+                        }
+                        3 {
+                            return "IxLoad"
+                        }
+                        7 {
+                            return "BreakingPoint"
+                        }
+                        10 {
+                            return "BreakingPoint L2/L3"
+                        }
+                        default {
+                            return "unknown"
+                        }
+                    }
+                } else {
+                    error "Empty Slot $slot"
+                }
+            }
+        }
+        #Invalid Slot or Slot infomation not available
+    }
+
+    #Raise Error
+    error "Invalid Slot $slot"
+}
+
+itcl::body bps::ChassisClient::getCardState {slot} {
+
+    if { [catch {_updateXML} ret] } {
+        error $ret
+    }
+
+    set doc [dom parse $ret]
+
+    foreach chassisState [$doc selectNodes chassisState] {
+        foreach slot_num [$chassisState selectNodes slot] {
+            foreach attr [$slot_num attributes] {
+                switch -- $attr {
+                    id {
+                        set id_val [$slot_num @$attr]
+                    }
+                    state {
+                        set state_val [$slot_num @$attr]
+                    }
+                }
+            }
+            if {$id_val == $slot} {
+                return $state_val
+            }
+        }
+        #Invalid Slot or Slot infomation not available
+    }
+
+    #Raise Error
+    error "Invalid Slot $slot."
+}
+
+itcl::body bps::ChassisClient::rebootCard {slot} {
+
+    if { [catch {_isPerfectStorm $slot} ret] } {
+        error $ret
+    }
+    if {$ret == 0} {
+        return "Operation only supported for card type PerfectStorm"
+    }
+
+    _createCommand doc root hotswapCard
+    if {$_host != "localhost"} {
+        $root setAttribute host $_host
+    }
+    $root setAttribute board $slot
+    $root setAttribute spawn "true"
+
+    if { [catch {$_bpsobj _execXml [$doc asXML]} ret] } {
+        error $ret
+    }
+
+    if { [catch {_waitForCard $slot} ret] } {
+        error $ret
+    }
+    return $ret
+}
+
+itcl::body bps::ChassisClient::setCardModeBPS_L23 {slot} {
+
+    if { [catch {_isPerfectStorm $slot} ret] } {
+        error $ret
+    }
+    if {$ret == 0} {
+        return "Operation only supported for card type PerfectStorm"
+    }
+
+    if { [catch {getCardMode $slot} ret] } {
+        error $ret
+    }
+    if {$ret == "BreakingPoint L2/L3"} {
+        return $ret
+    }
+
+    _createCommand doc root setTheCardMode
+    if {$_host != "localhost"} {
+        $root setAttribute host $_host
+    }
+    $root setAttribute board $slot
+    $root setAttribute mode "10"
+    $root setAttribute spawn "true"
+
+    if { [catch {$_bpsobj _execXml [$doc asXML]} ret] } {
+        error $ret
+    }
+
+    if { [catch {_waitForCard $slot} ret] } {
+        error $ret
+    }
+    return $ret
+}
+
+itcl::body bps::ChassisClient::setCardModeBPS {slot} {
+
+    if { [catch {_isPerfectStorm $slot} ret] } {
+        error $ret
+    }
+    if {$ret == 0} {
+        return "Operation only supported for card type PerfectStorm"
+    }
+
+    if { [catch {getCardMode $slot} ret] } {
+        error $ret
+    }
+    if {$ret == "BreakingPoint"} {
+        return $ret
+    }
+
+    _createCommand doc root setTheCardMode
+    if {$_host != "localhost"} {
+        $root setAttribute host $_host
+    }
+    $root setAttribute board $slot
+    $root setAttribute mode "7"
+    $root setAttribute spawn "true"
+
+    if { [catch {$_bpsobj _execXml [$doc asXML]} ret] } {
+        error $ret
+    }
+
+    if { [catch {_waitForCard $slot} ret] } {
+        error $ret
+    }
+    return $ret
+}
+
+itcl::body bps::ChassisClient::setCardModeIxLoad {slot} {
+
+    if { [catch {_isPerfectStorm $slot} ret] } {
+        error $ret
+    }
+    if {$ret == 0} {
+        return "Operation only supported for card type PerfectStorm"
+    }
+
+    if { [catch {getCardMode $slot} ret] } {
+        error $ret
+    }
+    if {$ret == "IxLoad"} {
+        return $ret
+    }
+
+    _createCommand doc root setTheCardMode
+    if {$_host != "localhost"} {
+        $root setAttribute host $_host
+    }
+    $root setAttribute board $slot
+    $root setAttribute mode "3"
+    $root setAttribute spawn "true"
+
+    if { [catch {$_bpsobj _execXml [$doc asXML]} ret] } {
+        return $ret
+    }
+
+    if { [catch {_waitForCard $slot} ret] } {
+        error $ret
+    }
+    return $ret
+}
+
+itcl::body bps::ChassisClient::PS100G_FanOut {slot fanid} {
+
+    if { [catch {_getCardType $slot} ret] } {
+        error $ret
+    }
+
+    if {$ret != "PerfectStorm 100GE1NG"} {
+        error "This operation only supported for PerfectStorm 100GE1NG card."
+    }
+
+    if {![string is integer -strict $fanid] || $fanid < 0 || $fanid > 2} {
+        error "Invalid fanid; must be an integer, 0(1x100G), 1(2x40G), 2(4x10G)."
+    }
+
+    _createCommand doc root setTheCardMode
+    if {$_host != "localhost"} {
+        $root setAttribute host $_host
+    }
+    $root setAttribute board $slot
+
+    # No longer necessary, but set anyway for backwards compatibility
+    $root setAttribute fanout "true"
+
+    # fanout is no more a valid attribute. Not changing the signature
+    # for backward compatibility. Instead of this we need to use "fanid"
+    # which is basically the option index.
+    $root setAttribute fanid $fanid
+
+    $root setAttribute spawn "true"
+
+    if { [catch {$_bpsobj _execXml [$doc asXML]} ret] } {
+        return $ret
+    }
+
+    if { [catch {_waitForCard $slot} ret] } {
+        error $ret
+    }
+
+    return $ret
+}
+
+itcl::body bps::ChassisClient::PS40G_FanOut {slot {fanout true}} {
+
+    if { [catch {_getCardType $slot} ret] } {
+        error $ret
+    }
+
+    if {$ret != "PerfectStorm 40GE2NG"} {
+        error "This operation only supported for PerfectStorm 40GE2NG card."
+    }
+
+    if {$fanout != true &&
+        $fanout != false} {
+        error "fanout parameter only can be true/false."
+    }
+
+    _createCommand doc root setTheCardMode
+    if {$_host != "localhost"} {
+        $root setAttribute host $_host
+    }
+    $root setAttribute board $slot
+
+    # As per Danny Huang <dahuang@ixiacom.com>
+    # fanout attribute is no more needed.
+    # But seems like "true" value has an impact.
+    $root setAttribute fanout "true"
+
+    # fanout is no more a valid attribute. Not changing the signature
+    # for backward compatibility. Instead of this we need to use "fanid"
+    # which is basically the option index.
+    if { $fanout == false } {
+        $root setAttribute fanid "0"
+    } else {
+        $root setAttribute fanid "1"
+    }
+
+    $root setAttribute spawn "true"
+
+    if { [catch {$_bpsobj _execXml [$doc asXML]} ret] } {
+        return $ret
+    }
+
+    if { [catch {_waitForCard $slot} ret] } {
+        error $ret
+    }
+
+    return $ret
+}
+
+itcl::body bps::ChassisClient::PS10G_setSpeed {slot {speed 10G}} {
+
+    if { [catch {_getCardType $slot} ret] } {
+        error $ret
+    }
+
+    if {$ret != "PerfectStorm 10GE8NG"} {
+        error "This operation only supported for PerfectStorm 10GE8NG card."
+    }
+
+    if {$speed != "10G" &&
+        $speed != "1G"} {
+        error "Card speed only can be 10G or 1G"
+    }
+
+    _createCommand doc root setTheCardMode
+    if {$_host != "localhost"} {
+        $root setAttribute host $_host
+    }
+    $root setAttribute board $slot
+    $root setAttribute speed $speed
+    $root setAttribute spawn "true"
+
+    if { [catch {$_bpsobj _execXml [$doc asXML]} ret] } {
+        return $ret
+    }
+
+    if { [catch {_waitForCard $slot} ret] } {
+        error $ret
+    }
+
+    return $ret
+}
+
+itcl::body bps::ChassisClient::packetTraceStatus {} {
+  set ret {}
+  foreach slot [$_xmlroot selectNodes slot] {
+    dict set ret [$slot @id] {}
+    foreach interface [$slot selectNodes interface] {
+    		set pcap [$interface selectNodes pcap]
+    		if {$pcap == ""} continue
+    		foreach attr {txbytes rxbytes txframes rxframes} {
+    				dict set ret [$slot @id] [$interface @id] $attr [$pcap @$attr 0]
+    		}
+    }
+  }
+  return $ret
+}
+
+itcl::body bps::ChassisClient::exportPacketTrace {dir args} {
+  if {$_host != "localhost"} {
+  		error "unable to export packet trace for a remote device"
+  }
+  if {[info exists _export]} {
+    error "unable to execute, an export is already in progress"
+  }
+  set optlist {
+    {progress.arg {} "script to run with progress notifications"}
+    {async.arg {} "return immediately, then run given script when complete"}
+    {force false "run the export in spite of warnings"}
+    {compress.arg true "whether to return the data in gz compressed pcap format"}
+    {txsnaplen.arg {} "truncate transmitted packets larger than this length"}
+    {txfilter.arg {} "BPF filter string to limit the data returned for transmitted packets"}
+    {rxsnaplen.arg {} "truncate received packets larger than this length"}
+    {rxfilter.arg {} "BPF filter string to limit the data returned for received packets"}
+    {starttype.arg megabytes "Units of start value {frames, megabytes}"}
+    {start.arg {} "starting offset into available data"}
+    {sizetype.arg megabytes "Units of size value {frames, megabytes}"}
+    {size.arg {} "size of data to be returned"}
+  }
+  array set opts [cmdline::getoptions args $optlist "exportPacketTrace options"]
+  if {[llength $args] == 0 || [expr [llength $args] % 3] != 0} {
+  		error "You must supply at least one export target, in the form\nexportPacketTrace directory ?options? slot port direction ?slot port direction ...?"
+  }
+  if {![string is boolean -strict $opts(force)]} {
+  		error "Invalid value for force, must be 'true' or 'false'" \
+  		  {} [list INVALID_FORCE $opts(force)]
+  }
+
+  if {[info exists _execProgress]} {
+    unset _execProgress
+  }
+
+  set _exportArgs(dir) $dir
+
+  if {[info exists _reply] && $_reply == "pending"} {
+  		error "An operation is already in progress"
+  }
+  set _reply pending
+  if {[catch {
+    _createCommand doc root exportPTrace
+    if {$opts(force)} {
+    		$root setAttribute force true
+    }
+    set portflags {}
+    foreach arg {txsnaplen txfilter rxsnaplen rxfilter 
+                 starttype start sizetype size 
+                 compress} {
+        if {$opts($arg) != ""} {
+    		    lappend portflags -$arg $opts($arg)
+    		}
+    }
+    $root appendFromScript {
+  	  foreach {slot port dir} $args {
+  	    if {![string is integer -strict $slot]} {
+  	      error "Invalid slot \"$slot\""
+  	    }
+  	    if {![string is integer -strict $port]} {
+  	      error "Invalid port \"$port\""
+  	    }
+  	    if {[lsearch {tx rx both} $dir] == -1} {
+  	      error "Invalid direction \"$dir\", must be one of 'tx', 'rx' or 'both'"
+  	    }
+  	    eval [list domNode::port -slot $slot -port $port -dir $dir] $portflags
+  	  }
+    }
+
+    if {$opts(progress) != ""} {
+      set _execProgress $opts(progress)
+    }
+    set token [$_bpsobj _reserveToken]
+    set _export $token
+    set _exportobjs($token) [namespace which $this]
+    set _exportComplete false
+    set _exportFiles {}
+    set ret [$_bpsobj _execXml [$doc asXML] $token]
+  } err]} {
+    global errorCode errorInfo
+    unset _reply
+    if {[info exists _export]} {
+    		unset _export
+    }
+    if {[info exists token] && [info exists _exportobjs($token)]} {
+    		unset _exportobjs($token)
+    }
+    error $err $errorInfo $errorCode
+  }
+  if {$opts(async) != ""} {
+    set _execAsync $opts(async)
+    return
+  }
+
+  return [wait]
+}
+
+itcl::body bps::ChassisClient::getDiags {args} {
+  set optlist {
+    {file.arg    {} "output file"}
+    {channel.arg {} "output channel"}
+  }
+  array set opts [cmdline::getoptions args $optlist "getDiags options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "getDiags options:"]
+  }
+
+  if {$opts(channel) != ""} {
+    set needclose false
+    set chan $opts(channel)
+  } elseif {$opts(file) != ""} {
+    set needclose true
+    set chan [open $opts(file) w]
+  } else {
+    error "Either -file or -channel must be specified"
+  }
+
+  try {
+    set query [http::formatQuery report Diagnostics]
+    set tok [http::geturl http://[$_bpsobj host]/gwt/SecureBugReport \
+                -protocol 1.0 \
+                -query $query \
+		    	-headers [list Cookie IXSESSIONID=[namespace \
+		    		    inscope ::bps::BPSConnection $_bpsobj _jsessionid]] \
+                -channel $chan]
+    try {
+      if {[http::status $tok] != "ok"
+          || [http::ncode $tok] != 200} {
+        error "Error downloading diags: [http::code $tok]"
+      }
+    } finally {
+      http::cleanup $tok
+    }
+  } finally {
+    if {$needclose} {
+      close $chan
+    }
+  }
+}
+
+itcl::body bps::ChassisClient::getResourceAllocation {slot args} {
+  set optlist {
+    {group.arg    1 "group"}
+  }
+  array set opts [cmdline::getoptions args $optlist "getResourceAllocation options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "getResourceAllocation options:"]
+  }
+
+  set portlist [$_xmlroot selectNodes "slot\[@id='$slot'\]/interface"]
+  if {$portlist == ""} {
+  		error "Invalid slot id \"$slot\""
+  }
+  set count 0
+  foreach thisport $portlist {
+      if {[$thisport @reservedBy {}] == $_userid
+      	  && [$thisport @group -1] == $opts(group)} {
+      		incr count
+      }
+  }
+  return [expr 100 * $count / [llength $portlist]]
+}
+
+itcl::body bps::ChassisClient::wait {} {
+  if {![info exists _reply]} {
+    return
+  }
+  if {$_reply == "pending"} {
+    vwait [itcl::scope _reply]
+  }
+  foreach {condition value errcode} $_reply break
+  unset _reply
+  if {$condition == "error"} {
+  		error $value {} $errcode
+  }
+  return $value
+}
+
+itcl::body bps::ChassisClient::expungeDB {args} {
+  set optlist {
+    {full {} "Full expunge"}
+    {async.arg {} "command to execute when expunge is complete"}
+  }
+  array set opts [cmdline::getoptions args $optlist "expungeDB options"]
+  if {[llength $args] > 0} {
+    error [cmdline::usage $optlist "expungeDB options:"]
+  }
+  if {[info exists _reply] && $_reply == "pending"} {
+  		error "An operation is already in progress"
+  }
+
+  dom createDocument vacuumDb doc
+  $doc documentElement root
+  if {$opts(full)} {
+  		$root setAttribute full true
+  }
+  set _reply pending
+  $_bpsobj _execXml [$doc asXML]
+  if {$opts(async) != ""} {
+    set _execAsync $opts(async)
+    return
+  }
+
+  return [wait]
+}
+
+
+itcl::body bps::ChassisClient::getSystemErrorLog {} {
+		_createCommand doc root getLogs
+		dom parse [$_bpsobj _execXml [$doc asXML]] doc
+		$doc documentElement ret
+		set ret [$ret selectNodes child::node()]
+		if {$ret != ""} {
+				set ret [$ret asXML]
+		}
+		return $ret
+}
+
+
+itcl::body bps::ChassisClient::_createCommand {docvar rootvar command} {
+  upvar $docvar doc
+  upvar $rootvar root
+  dom createDocument $command doc
+  $doc documentElement root
+}
+
+itcl::body bps::ChassisClient::_try {cmd args} {
+  if {$cmd != {}} {
+    set code [catch {uplevel #0 $cmd $args}]
+    if {$code != 0} {
+      global errorInfo
+      puts stderr "Error from chassis notification:"
+      puts stderr $errorInfo
+    }
+  }
+}
+
+itcl::body bps::ChassisClient::_handleNotify {event domnode} {
+  switch $event {
+    connectionClosed {
+      _removeClient $_bpsobj $_host [namespace which $this]
+      set _closed true
+      _try $onclose [namespace which $this]
+    }
+    chassisState {
+      dom parse [$_xmldoc asXML] oldinfo
+      $oldinfo documentElement oldroot
+
+      dom parse [$domnode asXML] _xmldoc
+      $_xmldoc documentElement _xmlroot
+
+      foreach oldslot [$oldroot selectNodes slot] {
+      		# if the slot has been left out of the new info, the means it's
+      		# unchanged. Copy over the old data, so the logic still works the same
+      		# everywhere in this file
+      		if {[$_xmlroot selectNodes slot\[@id='[$oldslot @id]'\]] == ""} {
+      				$_xmlroot appendXML [$oldslot asXML]
+      		}
+      }
+
+      set old(expunge) [$oldroot @vacuumInProgress false]
+      set new(expunge) [$_xmlroot @vacuumInProgress false]
+      if {$old(expunge) != $new(expunge)} {
+      		_try $onexpunge $new(expunge)
+		      if {!$new(expunge) && [info exists _reply]} {
+		          set _reply [list ok {} {}]
+		          if {[info exists _execAsync]} {
+		              _try $_execAsync
+		              unset _execAsync
+		          }
+		      }
+      }
+
+      set old(disk) [$oldroot @diskUsed 0]
+      set new(disk) [$_xmlroot @diskUsed 0]
+      if {$old(disk) != $new(disk)} {
+      		_try $ondiskusage $new(disk)
+      }
+
+      foreach slot [$_xmlroot selectNodes slot] {
+        set oldslot [$oldroot selectNodes "slot\[@id='[$slot @id]'\]"]
+        if {$oldslot == ""} {
+          set old(slotstate) {}
+        } else {
+          set old(slotstate) [$oldslot @state initializing]
+        }
+        set new(slotstate) [$slot @state]
+        if {$new(slotstate) != $old(slotstate)} {
+          _try $onstate [$slot @id] {} $new(slotstate)
+        }
+        set ifaces [$slot selectNodes interface]
+        if {$ifaces == ""} {
+        		foreach oldiface [$oldslot selectNodes interface] {
+              # if number is unset, treat it as a non-reservation
+              if {[$oldiface @number -1] == -1} {
+                  set old(reserve) {}
+                  set old(group) {}
+              } else {
+                  set old(reserve) [$oldiface @reservedBy {}]
+                  set old(group) [$oldiface @group {}]
+              }
+              set old(link) [$oldiface @link down]
+              set old(media) [$oldiface @media fiber]
+              set old(speed) [$oldiface @speed 10000]
+              set old(duplex) [$oldiface @duplex full]
+              set old(state) [$oldiface @state initializing]
+              set new(reserve) {}
+              set new(group) {}
+              set new(link) ""
+              set new(media) ""
+              set new(speed) ""
+              set new(duplex) ""
+              set new(state) down
+              if {$new(link) != $old(link)
+                  || $new(media) != $old(media)
+                  || $new(speed) != $old(speed)
+                  || $new(duplex) != $old(duplex)} {
+                _try $onlink [$slot @id] [$oldiface @id] $new(link) \
+                                   $new(media) $new(speed) $new(duplex)
+              }
+
+              if {$new(state) != $old(state)} {
+                _try $onstate [$slot @id] [$oldiface @id] $new(state)
+              }
+              if {($new(reserve) != $old(reserve)
+                  || $new(group) != $old(group))} {
+                _try $onreserve [$slot @id] [$oldiface @id] $new(reserve) $new(group)
+              }
+        		}
+        }
+        foreach iface $ifaces {
+          if {$oldslot == ""} {
+            set old(reserve) {}
+            set old(link) down
+            set old(media) {}
+            set old(speed) {}
+            set old(duplex) {}
+            set old(state) {}
+          } else {
+            set oldiface [$oldslot selectNodes "interface\[@id='[$iface @id]'\]"]
+            if {$oldiface == ""} {
+              set old(reserve) {}
+              set old(group) {}
+              set old(link) down
+              set old(media) {}
+              set old(speed) {}
+              set old(duplex) {}
+              set old(state) {}
+            } else {
+              # if number is unset, treat it as a non-reservation
+              if {[$oldiface @number -1] == -1} {
+                  set old(reserve) {}
+                  set old(group) {}
+              } else {
+                  set old(reserve) [$oldiface @reservedBy {}]
+                  set old(group) [$oldiface @group {}]
+              }
+              set old(link) [$oldiface @link down]
+              set old(media) [$oldiface @media fiber]
+              set old(speed) [$oldiface @speed 10000]
+              set old(duplex) [$oldiface @duplex full]
+              set old(state) [$oldiface @state initializing]
+            }
+          }
+          # if number is unset, treat it as a non-reservation
+          if {[$iface @number -1] == -1} {
+              set new(reserve) {}
+              set new(group) {}
+          } else {
+              set new(reserve) [$iface @reservedBy {}]
+              set new(group) [$iface @group {}]
+          }
+          if {($new(reserve) != $old(reserve)
+              || $new(group) != $old(group))} {
+            _try $onreserve [$slot @id] [$iface @id] $new(reserve) $new(group)
+          }
+
+          set new(link) [$iface @link down]
+          set new(media) [$iface @media fiber]
+          set new(speed) [$iface @speed 10000]
+          set new(duplex) [$iface @duplex full]
+          if {$new(link) != $old(link)
+              || $new(media) != $old(media)
+              || $new(speed) != $old(speed)
+              || $new(duplex) != $old(duplex)} {
+            _try $onlink [$slot @id] [$iface @id] $new(link) \
+                                 $new(media) $new(speed) $new(duplex)
+          }
+
+          set new(state) [$iface @state]
+          if {$new(state) != $old(state)} {
+            _try $onstate [$slot @id] [$iface @id] $new(state)
+          }
+        }
+      }
+      if {$ontestprogress != ""} {
+          foreach test [$_xmlroot selectNodes runningTest] {
+          	  set data {}
+  	          set idnode [$test selectNodes {child::node()[@runid or @planid or @multiid]}]
+  	          foreach {idstring type id name} [namespace inscope ::bps::BPSConnection \
+  	               _getTestResultId $idnode] break
+              dict set data type $type
+              dict set data id $id
+              dict set data id $id
+              dict set data name $name
+              dict set data state [$test @state]
+              dict set data initProgress [$test @initProgress 0]
+              dict set data progress [$test @progress 0]
+              dict set data user [$test @user ""]
+              set ports {}
+              foreach portnode [$test selectNodes port] {
+      	          lappend ports [list slot [$portnode @slot] port [$portnode @port]]
+              }
+              dict set data ports $ports
+              _try $ontestprogress $idstring $data
+              foreach test [$test selectNodes subtest] {
+  	              set idnode [$test selectNodes {child::node()[@runid or @planid or @multiid]}]
+  	              if {$idnode != ""} {
+  	                  foreach {idstring type id name} [namespace inscope ::bps::BPSConnection \
+  	                       _getTestResultId $idnode] break
+                      dict set data type $type
+                      dict set data id $id
+                      dict set data id $id
+                      dict set data name $name
+                      dict set data state [$test @state]
+                      dict set data initProgress [$test @initProgress 0]
+                      dict set data progress [$test @progress 0]
+                      dict set data user [$test @user ""]
+                      set ports {}
+                      foreach portnode [$test selectNodes port] {
+      	                  lappend ports [list slot [$portnode @slot] port [$portnode @port]]
+                      }
+                      dict set data ports $ports
+                      _try $ontestprogress $idstring $data
+                }
+              }
+          }
+      }
+    }
+  }
+}
+
+itcl::body bps::ChassisClient::_handlePTraceNotify {token domnode} {
+		switch -exact [$domnode nodeName] {
+				chassisState {
+		        if {[info exists _execProgress]} {
+						    foreach interface \
+						           [$domnode selectNodes {//interface[@exportProgress]}] {
+		        		    set slotnode [$interface selectNodes parent::node()]
+		        		    _try $_execProgress [$slotnode @id] [$interface @number] \
+		        		                      [$interface @exportProgress]
+		            }
+		        }
+		        return
+		    }
+		    ptraceurls {
+		    		if {[$domnode @finished false]} {
+		    				set _exportComplete true
+		    				if {[array size _exportChannel] == 0} {
+		    				    if {[info exists _exportReplies] 
+		    						       && [llength $_exportReplies] > 0} {
+		    				        set _reply [lindex $_exportReplies 0]
+		    		            unset _exportReplies
+		    				    } else {
+		    						    set _reply [list ok $_exportFiles {}]
+		    				    }
+		                if {[info exists _execAsync]} {
+		                    _try $_execAsync [lindex $_reply 0] \
+		                                     [lindex $_reply 1]
+		                    unset _execAsync
+		                }
+		                if {[info exists _execProgress]} {
+		                    unset _execProgress
+		                }
+		                unset _exportobjs($_export)
+		                unset _export
+		            }
+		            return
+		        }
+		    		set urls {}
+		    		foreach urlnode [$domnode selectNodes url] {
+		    				set url [$urlnode selectNodes child::node()]
+		    				if {$url != ""} {
+		    						set url [$url asXML]
+		    				}
+		    				lappend urls $url
+		    		}
+		    		set errnode [$domnode selectNodes {error[1]}]
+		    		if {[llength $urls] == 0 && $errnode != ""} {
+		    				# must be all errors
+		    				set errtxt [$errnode selectNodes detail/child::node()]
+		    				if {$errtxt != ""} {
+		    				    set errtxt [$errtxt asXML]
+		    				}
+		    				set errcode [$errnode @id RUNTIME_ERROR]
+		    		} elseif {[catch {
+		    		    # start a download (potentially one of many)
+		    				regexp {name=(.*?)(&|$)} $url junk filename
+		    				set chan [open [file join $_exportArgs(dir) \
+		    				                       $filename] w]
+		    		    set tok [http::geturl http://[$_bpsobj host]$url \
+                                    -protocol 1.0 \
+		    		                -headers [list Cookie IXSESSIONID=[namespace \
+		    		            inscope ::bps::BPSConnection $_bpsobj _jsessionid]] \
+		    		                         -channel $chan \
+		    		                         -progress [namespace code [list \
+		    		                           $this _handlePTraceDownloadProgress]] \
+		    		                         -command [namespace code [list \
+		    		                           $this _handlePTraceDownloadComplete \
+		    		                           $filename]] ]
+            		set _exportChannel($tok) $chan
+            } err]} {
+            		global errorCode
+            		set errcode $errorCode
+            		set errtxt $err
+            } else {
+            		return
+            }
+		    }
+		    error {
+		    		set errcode [$domnode @id]
+		    		set errtxt [$domnode selectNodes detail/child::node()]
+		    		if {$errtxt != ""} {
+		    				set errtxt [$errtxt asXML]
+		    		}
+		    }
+		    default {
+		    		# ignore
+		    		return
+		    }
+		}
+
+		# if we haven't already returned, it's an error condition
+		if {[info exists chan]} {
+				close $chan
+		}
+		lappend _exportReplies [list error $errtxt $errcode]
+		return
+}
+
+itcl::body bps::ChassisClient::_handlePTraceDownloadProgress {token total complete} {
+		if {[info exists _execProgress]} {
+				set pcent 0
+				if {$total != 0} {
+						set pcent [expr 100.0 * $complete / $total]
+				}
+				_try $_execProgress {} {} $pcent
+		}
+}
+
+itcl::body bps::ChassisClient::_handlePTraceDownloadComplete {filename token} {
+		if {[info exists _exportChannel($token)]} {
+				close $_exportChannel($token)
+				unset _exportChannel($token)
+		}
+    if {[http::status $token] != "ok" 
+          || [http::ncode $token] != 200} { 
+		  lappend _exportReplies [list error [http::code $token] [http::ncode $token]]
+		}
+		http::cleanup $token
+		lappend _exportFiles $filename
+		if {$_exportComplete && [array size _exportChannel] == 0} {
+		    if {[info exists _exportReplies] 
+		    			 && [llength $_exportReplies] > 0} {
+		    		set _reply [lindex $_exportReplies 0]
+		    		unset _exportReplies
+		    } else {
+		    		set _reply [list ok $_exportFiles {}]
+		    }
+		    if {[info exists _execAsync]} {
+		        _try $_execAsync [lindex $_reply 0] \
+		                         [lindex $_reply 1]
+		        unset _execAsync
+		    }
+		    if {[info exists _execProgress]} {
+		        unset _execProgress
+		    }
+		    unset _exportobjs($_export)
+		    unset _export
+		}
+		return
+}
+
+itcl::body bps::ChassisClient::_handleSystemError {event bpsobj domnode} {
+		if {$bpsobj != $_bpsobj} return
+		_try $onsystemerror
+}
+
+itcl::body bps::ChassisClient::_handleTestEvent {event bpsobj domnode} {
+		if {$bpsobj != $_bpsobj} return
+		# multibox & series can have additional IDs inside 'test' elements, so
+		# eliminate those
+		set testidnode [$domnode selectNodes \
+		        {(//testmodelid|//testplanid|//multiboxid)[1]}]
+		if {$testidnode == ""} return
+		set testid [bps::BPSConnection::_getTestResultId $testidnode]
+		_try $ontest $event [lindex $testid 0]
+}
+
+itcl::body bps::ChassisClient::_updateXML {} {
+  dom createDocument getChassisState doc
+  $doc documentElement root
+  if {$_host != "localhost"} {
+    $root setAttribute host $_host
+  }
+  if { [catch {$_bpsobj _execXml [$doc asXML]} ret]} {
+      error $ret
+  }
+  #dom parse $ret _xmldoc
+  #$_xmldoc documentElement _xmlroot
+  return $ret
+}
+
+itcl::body bps::ChassisClient::_makeChange {domdoc} {
+  set ret [$_bpsobj _execXml [$domdoc asXML]]
+  _updateXML
+  return $ret
+}
+
+itcl::body bps::ChassisClient::_validatePortArgs {auto speed fullduplex ignorepause capture force} {
+  if {$auto != "\0" && ![string is boolean $auto]} {
+    error "Invalid setting for \"auto\", must be true, false, or {}"
+  }
+  if {$speed != "\0" && [lsearch {{} 10 100 1000 10000} $speed] == -1} {
+    error "Invalid setting for \"speed\", must be 10, 100, 1000, 10000, or {}"
+  }
+  if {$fullduplex != "\0" && ![string is boolean $fullduplex]} {
+    error "Invalid setting for \"fullduplex\", must be true, false, or {}"
+  }
+  if {$ignorepause != "\0" && $ignorepause != "" 
+      && ![string is boolean $ignorepause]} {
+    error "Invalid setting for \"ignorepause\", must be true or false"
+  }
+  if {$capture != "\0" && $capture != "" 
+      && ![string is boolean $capture]} {
+    error "Invalid setting for \"capture\", must be true or false"
+  }
+  if {$force != "\0" && $force != ""
+      && ![string is boolean $force]}   {
+    error "Invalid setting for \"force\", must be true or false"
+  } 
+}
+
+itcl::body bps::ChassisClient::_addClient {bpsobj host username password obj} {
+  if {![info exists _client($host)]} {
+    if {$host != "localhost"} {
+      dom createDocument openMulti odoc
+      $odoc documentElement oroot
+      $oroot setAttribute host $host
+      $oroot setAttribute user $username
+      $oroot setAttribute password $password
+
+      set ret [$bpsobj _execXml [$odoc asXML]]
+    }
+  }
+  lappend _client($host) $obj
+  return
+}
+
+itcl::body bps::ChassisClient::_removeClient {bpsobj host obj} {
+  if {[info exists _client($host)]} {
+    set i [lsearch $_client($host) $obj]
+    if {$i != -1} {
+      set _client($host) [lreplace $_client($host) $i $i]
+    }
+    if {[llength $_client($host)] == 0} {
+      if {$host != [$bpsobj host]} {
+        dom createDocument closeMulti odoc
+        $odoc documentElement oroot
+        $oroot setAttribute host $host
+
+        set ret [$bpsobj _execXml [$odoc asXML]]
+      }
+      unset _client($host)
+    }
+  }
+  return
+}
+
+itcl::body bps::ChassisClient::_stateChange {event bpsobj domnode} {
+  set host [$domnode @host "localhost"]
+  if {[info exists _client($host)]} {
+    foreach client $_client($host) {
+      if {[catch {$client _handleNotify $event $domnode} err]} {
+        _removeClient $bpsobj $host $client
+        global errorInfo
+        puts stderr "Error notifying client $client of a state change"
+        puts stderr $errorInfo
+      }
+    }
+  }
+}
+
+itcl::body bps::ChassisClient::_ptraceEvent {event bpsobj domnode} {
+		set objlist {}
+		if {[info exists _exportobjs($event)]} {
+				set objlist [list $event $_exportobjs($event)]
+		} elseif {$event == "chassisState"} {
+				set relevant [$domnode selectNodes {//interface[@exportProgress][1]}]
+				if {[llength $relevant] > 0} {
+				    foreach {key val} [array get _exportobjs] {
+				    		lappend objlist $key $val
+				    }
+		    }
+		}
+    foreach {event sublist} $objlist {
+        foreach obj $sublist {
+          if {[catch {$obj _handlePTraceNotify $event $domnode} err]} {
+              set i [lsearch $_exportobjs($event) $obj]
+              if {$i != -1} {
+          		    set _exportobjs($event) [lreplace $_exportobjs($event) $i $i]
+              }
+              if {$_exportobjs($event) == ""} {
+          		    unset _exportobjs($event)
+              }
+              puts stderr "Error notifying object $obj of a ptrace event"
+          }
+        }
+    }
+    return
+}
+
+itcl::body bps::ChassisClient::_systemError {event bpsobj domnode} {
+		foreach obj [itcl::find objects -class ::bps::ChassisClient] {
+				$obj _handleSystemError $event $bpsobj $domnode
+		}
+}
+
+itcl::body bps::ChassisClient::_testEvent {event bpsobj domnode} {
+		foreach obj [itcl::find objects -class ::bps::ChassisClient] {
+				$obj _handleTestEvent $event $bpsobj $domnode
+		}
+}
+
+package provide bps::ChassisClient 0.1

@@ -1,0 +1,17 @@
+package require Itcl
+package require log
+
+proc ifexists {cmd} {
+  set obj [lindex $cmd 0]
+  return [list do_if_exists $obj [uplevel namespace code [list $cmd]]]
+}
+
+proc do_if_exists {obj cmd args} {
+  if {[itcl::find object $obj] != ""} {
+    uplevel $cmd $args
+  } else {
+    log::log info "Command $cmd was skipped due to its object being gone"
+  }
+}
+
+package provide ifexists 0.1

@@ -1,0 +1,41 @@
+package require Itcl
+
+itcl::class %CLASS% {
+  inherit model::Int
+
+  constructor {args} {}
+  destructor {}
+
+  protected common min %MIN%
+  protected common max %MAX%
+
+  public variable value %DEFAULT%
+}
+
+itcl::body %CLASS%::constructor {args} {
+  set _type scalarParam
+  foreach arg {itemname} {
+    set cfgix [lsearch $args -$arg]
+    if {$cfgix != -1 && ($cfgix % 2) == 0 && ([llength $args] % 2) == 0} {
+      configure -$arg [lindex $args [expr $cfgix + 1]]
+    }
+  }
+  set value "%DEFAULT%"
+  eval configure $args
+  if {![info exists value]} {
+    error "value must be specified" {} RUNTIME_ERROR
+  }
+}
+
+itcl::body %CLASS%::destructor {} {
+}
+
+itcl::configbody %CLASS%::value {
+  if {$value != ""} {
+    set value [string trimleft $value 0]
+    if {$value == ""} {
+      set value 0
+    }
+  }
+}
+log::log warn "scalarParam %CLASS% declared"

@@ -1,0 +1,95 @@
+package require Itcl
+package require tdom
+package require domunknown
+
+itcl::class %CLASS% {
+  inherit model::List
+
+  constructor {args} {}
+  destructor {}
+
+  protected common membertype %MEMBERTYPE%
+  public variable value
+  protected variable value_list {}
+
+  public method paramSpec {key {indent {}}}
+  public method typedParamSpec {key {indent {}}}
+
+  protected proc _deleteInstances {instances}
+}
+
+itcl::body %CLASS%::constructor {args} {
+  set _type list
+  # need to put component and model in place first
+  foreach arg {component model context} {
+    set cfgix [lsearch $args -$arg]
+    if {$cfgix != -1 && ($cfgix % 2) == 0 && ([llength $args] % 2) == 0} {
+      eval [list configure -$arg [lindex $args [expr $cfgix + 1]]]
+    }
+  }
+  eval configure $args
+  if {![info exists value]} {
+    error "value must be specified" {} RUNTIME_ERROR
+  }
+}
+
+itcl::body %CLASS%::destructor {} {
+  _deleteInstances $value_list
+}
+
+itcl::body %CLASS%::_deleteInstances {instances} {
+  foreach {id inst} $instances {
+    catch {itcl::delete object $inst}
+  }
+}
+
+itcl::configbody %CLASS%::value {
+  set i -1
+  set temp {}
+  if {[catch {
+    foreach {id val} $value {
+      lappend temp $id [namespace which [$membertype #auto -value $val \
+				     -component $component -model $model \
+                                     -context $context]]
+    }
+  } err]} {
+    # need to get rid of instances that got created
+    global errorInfo
+    %CLASS%::_deleteInstances $temp
+    error $err $errorInfo RUNTIME_ERROR
+  }
+  
+  # commit changes
+  _deleteInstances $value_list
+  set value_list $temp
+}
+
+itcl::body %CLASS%::paramSpec {key {indent {}}} {
+  dom createDocument list doc
+  $doc documentElement root
+  $root setAttribute id $key
+  set index -1
+  foreach {id inst} $value_list {
+    set xml [$inst paramSpec [incr index]]
+    if {$xml != ""} {
+      $root appendXML $xml
+    }
+  }
+  return [$doc asXML -indent [string length $indent]]
+}
+
+itcl::body %CLASS%::typedParamSpec {key {indent {}}} {
+  dom createDocument list doc
+  $doc documentElement root
+  $root setAttribute id $key
+  set index -1
+  foreach {id inst} $value_list {
+    set xml [$inst typedParamSpec [incr index]]
+    if {$xml != ""} {
+      $root appendXML $xml
+    }
+  }
+  return [$doc asXML -indent [string length $indent]]
+}
+
+log::log warn "list %CLASS% declared"
