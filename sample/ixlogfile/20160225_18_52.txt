@@ -1,0 +1,7 @@
+02/25/16 06:52:20 PM INFO: ----- TAG: Tester::constructor 172.16.174.131 admin admin  C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 06:52:20 PM INFO: bps::connect 172.16.174.131 admin admin  
+02/25/16 06:52:25 PM INFO: bPSConnection0 getChassis 
+02/25/16 06:52:25 PM INFO: ----- TAG: body Tester::createNetwork MyNetworkXYZ -template MyNetwork C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 06:52:25 PM INFO: bPSConnection0 createNetwork -name MyNetworkXYZ -template MyNetwork 
+02/25/16 06:52:25 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ configure -name MyNetworkXYZ 
+02/25/16 06:56:37 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ get ip_static_hosts "Static Hosts i13_default" 

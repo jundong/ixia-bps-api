@@ -6,8 +6,8 @@ namespace import IXIA::*
 
 IxdebugOn
 
-set network {BreakingPoint Switching}
-set newNetwork {MyNetwork}
+set network {MyNetwork}
+set newNetwork {MyNetworkXYZ}
 
 Tester @tester 172.16.174.131 admin admin
 set conn [ @tester getConnection ]

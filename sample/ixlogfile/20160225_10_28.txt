@@ -1,0 +1,19 @@
+02/25/16 10:28:06 AM INFO: ----- TAG: Tester::constructor 172.16.174.131 admin admin  C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 10:28:06 AM INFO: bps::connect 172.16.174.131 admin admin  
+02/25/16 10:28:12 AM INFO: bPSConnection0 getChassis 
+02/25/16 10:28:12 AM INFO: ----- TAG: body Tester::createNetwork MyNetworkXYZ -template {BreakingPoint Switching} C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 10:28:12 AM INFO: bPSConnection0 createNetwork -name MyNetworkXYZ -template {BreakingPoint Switching} 
+02/25/16 05:03:01 PM INFO: ----- TAG: body Tester::configureNetwork MyNetworkXYZ add interface  -description {New interface} -mac_address 02:1A:D5:01:00:00 -number 1 -id NewInterface1 C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 05:03:01 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ add interface -description {New interface} -mac_address 02:1A:D5:01:00:00 -number 1 -id NewInterface1 
+02/25/16 05:03:01 PM INFO: ----- Failed to configure network MyNetworkXYZ: error writing "sock648": connection reset by peer ----- 
+02/25/16 05:03:01 PM INFO: ----- TAG: body Tester::configureNetwork MyNetworkXYZ config interface NewInterface1 -description {Updated interface} C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 05:03:01 PM INFO: ----- Failed to configure network MyNetworkXYZ: error writing "sock648": connection reset by peer ----- 
+02/25/16 05:03:01 PM INFO: ----- TAG: body Tester::configureNetwork MyNetworkXYZ remove interface NewInterface1  C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 05:03:01 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ remove interface NewInterface1 
+02/25/16 05:03:01 PM INFO: ----- Failed to configure network MyNetworkXYZ: error writing "sock648": connection reset by peer ----- 
+02/25/16 05:03:01 PM INFO: ----- TAG: body Tester::configureNetwork MyNetworkXYZ add path path1 path2  C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 05:03:01 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ addPath path1 path2 
+02/25/16 05:03:01 PM INFO: ----- Failed to configure network MyNetworkXYZ: error writing "sock648": connection reset by peer ----- 
+02/25/16 05:03:01 PM INFO: ----- TAG: body Tester::configureNetwork MyNetworkXYZ remove path path1 path2  C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 05:03:01 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ removePath path1 path2 
+02/25/16 05:03:01 PM INFO: ----- Failed to configure network MyNetworkXYZ: path not found ----- 

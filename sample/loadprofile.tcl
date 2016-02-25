@@ -43,4 +43,4 @@ set index 2
 
 #Available phases
 #$profile getPhases
-#0 {duration 1 rampDist.upBehavior full sessions.max 50000 sessions.maxPerSecond 50000 rateDist.min 900 rateDist.unit mbps rateDist.scope per_if} 1 {duration 28 rampDist.steadyBehavior cycle sessions.max 50000 sessions.maxPerSecond 50000 rateDist.min 900 rateDist.unit mbps rateDist.scope per_if} 2 {duration 1 rampDist.downBehavior full sessions.max 1 sessions.maxPerSecond 50000 rateDist.min 900 rateDist.unit mbps rateDist.scope per_if}
+#0 {-duration 1 -rampDist.upBehavior full -sessions.max 50000 -sessions.maxPerSecond 50000 -rateDist.min 900 -rateDist.unit mbps -rateDist.scope per_if} 1 {-duration 28 -rampDist.steadyBehavior cycle -sessions.max 50000 -sessions.maxPerSecond 50000 -rateDist.min 900 -rateDist.unit mbps -rateDist.scope per_if} 2 {-duration 1 -rampDist.downBehavior full -sessions.max 1 -sessions.maxPerSecond 50000 -rateDist.min 900 -rateDist.unit mbps -rateDist.scope per_if}

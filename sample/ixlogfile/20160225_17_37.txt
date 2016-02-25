@@ -1,0 +1,26 @@
+02/25/16 05:37:26 PM INFO: ----- TAG: Tester::constructor 172.16.174.131 admin admin  C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 05:37:26 PM INFO: bps::connect 172.16.174.131 admin admin  
+02/25/16 05:37:32 PM INFO: bPSConnection0 getChassis 
+02/25/16 05:37:32 PM INFO: ----- TAG: body Tester::createNetwork MyNetworkXYZ -template MyNetwork C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 05:37:32 PM INFO: bPSConnection0 createNetwork -name MyNetworkXYZ -template MyNetwork 
+02/25/16 05:37:32 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ configure -name MyNetworkXYZ 
+02/25/16 05:40:26 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ get ip_router ip_router 1 
+02/25/16 05:40:26 PM INFO: No network MyNetworkXYZ found: wrong # args: should be "MyNetworkXYZ get type id" 
+02/25/16 05:40:37 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ get ip_router {ip_router 1} 
+02/25/16 05:40:53 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ get ip_router "ip_router 1" 
+02/25/16 05:40:58 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ get ip_router ip_router 1 
+02/25/16 05:40:58 PM INFO: No network MyNetworkXYZ found: wrong # args: should be "MyNetworkXYZ get type id" 
+02/25/16 06:52:06 PM INFO: ----- TAG: body Tester::configureNetwork MyNetworkXYZ add interface  -description {New interface} -mac_address 02:1A:D5:01:00:00 -number 1 -id NewInterface1 C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 06:52:06 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ add interface -description {New interface} -mac_address 02:1A:D5:01:00:00 -number 1 -id NewInterface1 
+02/25/16 06:52:06 PM INFO: ----- Failed to configure network MyNetworkXYZ: error writing "sock596": connection reset by peer ----- 
+02/25/16 06:52:06 PM INFO: ----- TAG: body Tester::configureNetwork MyNetworkXYZ config interface NewInterface1 -description {Updated interface} C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 06:52:06 PM INFO: ----- Failed to configure network MyNetworkXYZ: Interface not found: NewInterface1 ----- 
+02/25/16 06:52:06 PM INFO: ----- TAG: body Tester::configureNetwork MyNetworkXYZ remove interface NewInterface1  C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 06:52:06 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ remove interface NewInterface1 
+02/25/16 06:52:06 PM INFO: ----- Failed to configure network MyNetworkXYZ: Interface not found: NewInterface1 ----- 
+02/25/16 06:52:06 PM INFO: ----- TAG: body Tester::configureNetwork MyNetworkXYZ add path path1 path2  C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 06:52:06 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ addPath path1 path2 
+02/25/16 06:52:06 PM INFO: ----- Failed to configure network MyNetworkXYZ: error writing "sock596": connection reset by peer ----- 
+02/25/16 06:52:06 PM INFO: ----- TAG: body Tester::configureNetwork MyNetworkXYZ remove path path1 path2  C:/Ixia/Workspace/ixia-bps-api/sample/network.tcl ----- 
+02/25/16 06:52:06 PM INFO: ::bps::BPSConnection::IXIA::Tester::bPSConnection0::MyNetworkXYZ removePath path1 path2 
+02/25/16 06:52:06 PM INFO: ----- Failed to configure network MyNetworkXYZ: path not found ----- 

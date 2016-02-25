@@ -13,6 +13,8 @@ set componentName {MyAutoComponent}
 
 set loadProfileName {BreakingPoint Default}
 set newLoadProfileName {MyAutoLoadProfile}
+set appProfile {MyAppProfile}
+set newAppProfile {MyAppProfile}
 
 #Tester @tester 192.168.0.132 admin admin
 Tester @tester 172.16.174.131 admin admin
@@ -29,6 +31,9 @@ set loadProfile [ @tester getLoadProfile $newLoadProfileName ]
 
 @tester createComponent $testNewName $componentName "appsim"
 set component [ @tester getComponent $componentName ]
+
+@tester createAppProfile $newAppProfile -template $appProfile
+set profile [ @tester getAppProfile $newAppProfile ]
 
 # Configure for component
 #

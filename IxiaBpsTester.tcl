@@ -83,9 +83,25 @@ namespace eval IXIA {
         public method configurePhase { name action index args } {}
         public method configureNetwork { name action type parameters args } {}
         public method configureSuperflow { name action type parameters args } {}
-        public method configureComponent { testName componentName args } {}
         public method configureAppProfile { appProfileName superFlowName action args } {}
         public method configurePort { slot port args } {}
+        
+        public method listElementOptions { networkName type id } {
+            set args ""
+            if { [ catch {
+                if { [info exists _networks($networkName) ] } {
+                    set networkHandle $_networks($networkName)
+                    set cmd "$networkHandle get $type $id"
+                    Deputs $cmd
+                    set handle [eval $cmd]
+                    set args [$handle configure]
+                }
+            } err ] } {
+                Deputs "No network $networkName found: $err"
+                error "No network $networkName found: $err"
+            }
+            return $args
+        }
         
         public method save { name args } {}
         public method delete { name args } {}
@@ -96,7 +112,7 @@ namespace eval IXIA {
         
         public method startCapture {} { $_connection startPacketTrace }
         public method stopCapture {} { $_connection stopPacketTrace }
-        public method exportCapture { dir slot port direction args } {}
+        public method exportCapture { portlist dir direction args } {}
         
         public method getRtStats { name args } {}
         public method getAggStats { name args } {}
@@ -113,8 +129,8 @@ namespace eval IXIA {
         
         public method getChassis {} { return $_chassis }
         public method getConnection {} {
-            return $_connection
-            #return IXIA::Tester::$_connection
+            #return $_connection
+            return IXIA::Tester::$_connection
         }
         public method getTest { name } {
             set testHandle ""
@@ -781,6 +797,10 @@ namespace eval IXIA {
                 Deputs $cmd
                 set _loadProfiles($name) [ eval $cmd ]
                 Deputs $_loadProfiles($name)
+                
+                set cmd "$_loadProfiles($name) configure -name $name"
+                Deputs $cmd
+                eval $cmd
             } else {
                 Deputs "Load profile $name has already exists"
             }
@@ -816,9 +836,9 @@ namespace eval IXIA {
                 Deputs $cmd
                 set _networks($name) [ eval $cmd ]
                 
-                #set cmd "$_networks($name) save -name $name -force "
-                #Deputs $cmd
-                #eval $cmd
+                set cmd "$_networks($name) configure -name $name"
+                Deputs $cmd
+                eval $cmd
             } else {
                 Deputs "Nework neihorhood $name has already exists"
             }
@@ -947,7 +967,7 @@ namespace eval IXIA {
     # Name: exportCapture - Export test capture
     #--
     # Parameters:
-    #       portlist: Port list to unreserve, eg. [list {1 0} {1 1}]
+    #       portlist: Port list to export capture, eg. [list {1 0} {1 1}]
     #       dir: Directory to put export capture
     #       direction: Packets direction in capture, eg. tx, rx or both
     #       args:
@@ -1038,12 +1058,9 @@ namespace eval IXIA {
                 Deputs $cmd
                 eval $cmd
             } else {
-                set cmd "$_connection exportTest $args"
+                set cmd "$_connection exportTest $name $args"
                 Deputs $cmd
                 eval $cmd
-                set cmd "createTest $name -template $name"
-                Deputs $cmd
-                set _tests($name) [ eval $cmd ]
             }
         } err ] } {
             Deputs "----- Failed to export $name: $err -----"
@@ -1077,6 +1094,10 @@ namespace eval IXIA {
             set cmd "$_connection importTest $name $args"
             Deputs $cmd
             eval $cmd
+            
+            set cmd "createTest $name -template $name"
+            Deputs $cmd
+            eval $cmd
         } err ] } {
             Deputs "----- Failed to export $name: $err -----"
             return [GetErrorReturnHeader $err]
@@ -1091,9 +1112,13 @@ namespace eval IXIA {
     # Parameters:
     #       name: Test or test series name, mandatory parameter
     #       args:
-    #           -progress: Monitor test progress call back function, default is cbTestProgress
-    #           -rtstats: Run-time statistics call back function, default is cbRunTimeStats
-    #           ........
+                #-allowMalware£ºConfirm that malware should be allowed in this test
+                #-async: Runs the test in the background and executes the command specified
+                #-flowexceptions: Identifies the script to run with flow exception notifications
+                #-group: Identifies the interface group to be used
+                #-progress: Allows you to monitor the progress of the test
+                #-rtstats: Calls the -rtstats attribute when there are new Real-Time statistics available
+
     # Return:
     #        0 if got success
     #        raise error if failed
@@ -1194,6 +1219,10 @@ namespace eval IXIA {
                 set cmd "$_connection createTest -name $name $args"
                 Deputs $cmd
                 set _tests($name) [ eval $cmd ]
+
+                set cmd "$_tests($name) configure -name $name"
+                Deputs $cmd
+                eval $cmd
             } else {
                 Deputs "Test $name has already exists"
             }
@@ -1228,6 +1257,10 @@ namespace eval IXIA {
                 set cmd "$_connection createTestSeries -name $name $args"
                 Deputs $cmd
                 set _testSeries($name) [ eval $cmd ]
+                
+                set cmd "$_testSeries($name) configure -name $name"
+                Deputs $cmd
+                eval $cmd
             } else {
                 Deputs "Test series $name has already exists"
             }
@@ -1262,6 +1295,10 @@ namespace eval IXIA {
                 set cmd "$_connection createAppProfile -name $name $args"
                 Deputs $cmd
                 set _appProfiles($name) [ eval $cmd ]
+                
+                set cmd "$_appProfiles($name) configure -name $name"
+                Deputs $cmd
+                eval $cmd
             } else {
                 Deputs "App profile $name has already exists"
             }
@@ -1296,6 +1333,10 @@ namespace eval IXIA {
                 set cmd "$_connection createSuperflow -name $name $args"
                 Deputs $cmd
                 set _superflows($name) [ eval $cmd ]
+                
+                set cmd "$_superflows($name) configure -name $name"
+                Deputs $cmd
+                eval $cmd
             } else {
                 Deputs "Super flow $name has already exists"
             }
@@ -1314,7 +1355,6 @@ namespace eval IXIA {
     #       componentName: The name of component to create, mandatory parameter
     #       componentType: The type of component, mandatory parameter
     #       args:
-    #           -template: Canned app profile as a template
     # Return:
     #        0 if got success
     #        raise error if failed
@@ -1374,37 +1414,37 @@ namespace eval IXIA {
     #       args:
     #           -filters: Filter desired results
     # Return:
-    #        tcpClientClosed: 5672
-    #        tcpServerCloseRate: 0
-    #        tcpClientEstablishRate: 0
-    #        appAttempted: 18465
-    #        ethRxFrameRate: 68.69
-    #        tcpAvgCloseTime: 0.107
-    #        tcpAvgResponseTime: 0.243
-    #        ethTxFrameRate: 68.69
-    #        t: 144.463
-    #        progress: 100
-    #        appSuccessfulRate: 0
-    #        tcpAvgSetupTime: 0.31
-    #        tcpClientEstablished: 5676
-    #        tcpAvgSessionDuration: 273.14
-    #        time: 147.59636
-    #        udpFlowsConcurrent: 4
-    #        tcpServerClosed: 5672
-    #        tcpClientCloseRate: 0
-    #        sctpFlowsConcurrent: 0
-    #        tcpServerEstablishRate: 0
-    #        appSuccessful: 18463
-    #        ethRxFrames: 236100
-    #        tcpAttemptRate: 0
-    #        ethTxFrames: 236100
-    #        ethRxFrameDataRate: 0.1365
-    #        appAttemptedRate: 0
-    #        tcpFlowsConcurrent: 4
-    #        superFlowsConcurrent: 2
-    #        tcpServerEstablished: 5676
-    #        ethTxFrameDataRate: 0.1365
-    #        tcpAttempted: 5676
+            #tcpClientClosed: 5672
+            #tcpServerCloseRate: 0
+            #tcpClientEstablishRate: 0
+            #appAttempted: 18465
+            #ethRxFrameRate: 68.69
+            #tcpAvgCloseTime: 0.107
+            #tcpAvgResponseTime: 0.243
+            #ethTxFrameRate: 68.69
+            #t: 144.463
+            #progress: 100
+            #appSuccessfulRate: 0
+            #tcpAvgSetupTime: 0.31
+            #tcpClientEstablished: 5676
+            #tcpAvgSessionDuration: 273.14
+            #time: 147.59636
+            #udpFlowsConcurrent: 4
+            #tcpServerClosed: 5672
+            #tcpClientCloseRate: 0
+            #sctpFlowsConcurrent: 0
+            #tcpServerEstablishRate: 0
+            #appSuccessful: 18463
+            #ethRxFrames: 236100
+            #tcpAttemptRate: 0
+            #ethTxFrames: 236100
+            #ethRxFrameDataRate: 0.1365
+            #appAttemptedRate: 0
+            #tcpFlowsConcurrent: 4
+            #superFlowsConcurrent: 2
+            #tcpServerEstablished: 5676
+            #ethTxFrameDataRate: 0.1365
+            #tcpAttempted: 5676
     #
     #        return [] if no results
     #--
@@ -1455,53 +1495,53 @@ namespace eval IXIA {
     #       args:
     #           -filters: Filter desired results
     # Return:
-    #        cpu_usage: CPU Usage
-    #        ethAlignmentErrors: Ethernet alignment errors
-    #        ethDropEvents: Ethernet drop events
-    #        ethFCSErrors: Ethernet FCS errors
-    #        ethOversizedFrames: Ethernet oversize frames
-    #        ethRxErrors: Ethernet receive errors
-    #        ethRxFrameData: Ethernet bytes received. This includes L7
-    #                        and all packet overhead, including L2,
-    #                        L3, L4 headers, ethernet CRC, and interpacket
-    #                        gap (20 bytes per frame).
-    #        ethRxFrameDataRate: Ethernet receive rate. This includes L7
-    #                        and all packet overhead, including L2,
-    #                        L3, L4 headers, ethernet CRC, and interpacket
-    #                        gap (20 bytes per frame)
-    #        ethRxFrameRate: Ethernet frame receive rate
-    #        ethRxFrames: Ethernet frames received
-    #        ethRxPauseFrames: Ethernet pause frames received
-    #        ethTotalErrors: Total Errors
-    #        ethTxErrors: Ethernet transmit errors
-    #        ethTxFrameData: Ethernet bytes transmit. This includes L7
-    #                        and all packet overhead, including L2,
-    #                        L3, L4 headers, ethernet CRC, and interpacket
-    #                        gap (20 bytes per frame).
-    #        ethTxFrameDataRate: Ethernet transmit rate. This includes L7
-    #                        and all packet overhead, including L2,
-    #                        L3, L4 headers, ethernet CRC, and interpacket
-    #                        gap (20 bytes per frame).
-    #        ethTxFrameRate: Ethernet frame transmit rate
-    #        ethTxFrames: Ethernet frames transmitted
-    #        ethTxPauseFrames: Ethernet pause frames transmitted
-    #        ethUndersizedFrames: Ethernet undersize frames
-    #        linux mem_free_kb: Free memory on the System Controller
-    #        mem_total_kb: Total memory on the System Controller
-    #        mem_used_kb: Used memory
-    #        mount percent_used: The percent of disk spaced used on the disk partition
-    #        superFlowRate: Super Flow rate
-    #        superFlows: Aggregate Super Flows
-    #        superFlowsConcurrent: Concurrent Super Flows
-    #        tcpFlowRate: TCP Flow rate
-    #        tcpFlows: Aggregate TCP Flows
-    #        tcpFlowsConcurrent: Concurrent TCP Flows
-    #        timestamp: The time that the datapoint was taken
-    #                            (refers to the rest of the data that comes
-    #                            with it)
-    #        udpFlowRate: UDP Flow rate
-    #        udpFlows: Aggregate UDP Flows
-    #        udpFlowsConcurrent: Concurrent UDP Flows
+            #cpu_usage: CPU Usage
+            #ethAlignmentErrors: Ethernet alignment errors
+            #ethDropEvents: Ethernet drop events
+            #ethFCSErrors: Ethernet FCS errors
+            #ethOversizedFrames: Ethernet oversize frames
+            #ethRxErrors: Ethernet receive errors
+            #ethRxFrameData: Ethernet bytes received. This includes L7
+            #                and all packet overhead, including L2,
+            #                L3, L4 headers, ethernet CRC, and interpacket
+            #                gap (20 bytes per frame).
+            #ethRxFrameDataRate: Ethernet receive rate. This includes L7
+            #                and all packet overhead, including L2,
+            #                L3, L4 headers, ethernet CRC, and interpacket
+            #                gap (20 bytes per frame)
+            #ethRxFrameRate: Ethernet frame receive rate
+            #ethRxFrames: Ethernet frames received
+            #ethRxPauseFrames: Ethernet pause frames received
+            #ethTotalErrors: Total Errors
+            #ethTxErrors: Ethernet transmit errors
+            #ethTxFrameData: Ethernet bytes transmit. This includes L7
+            #                and all packet overhead, including L2,
+            #                L3, L4 headers, ethernet CRC, and interpacket
+            #                gap (20 bytes per frame).
+            #ethTxFrameDataRate: Ethernet transmit rate. This includes L7
+            #                and all packet overhead, including L2,
+            #                L3, L4 headers, ethernet CRC, and interpacket
+            #                gap (20 bytes per frame).
+            #ethTxFrameRate: Ethernet frame transmit rate
+            #ethTxFrames: Ethernet frames transmitted
+            #ethTxPauseFrames: Ethernet pause frames transmitted
+            #ethUndersizedFrames: Ethernet undersize frames
+            #linux mem_free_kb: Free memory on the System Controller
+            #mem_total_kb: Total memory on the System Controller
+            #mem_used_kb: Used memory
+            #mount percent_used: The percent of disk spaced used on the disk partition
+            #superFlowRate: Super Flow rate
+            #superFlows: Aggregate Super Flows
+            #superFlowsConcurrent: Concurrent Super Flows
+            #tcpFlowRate: TCP Flow rate
+            #tcpFlows: Aggregate TCP Flows
+            #tcpFlowsConcurrent: Concurrent TCP Flows
+            #timestamp: The time that the datapoint was taken
+            #                    (refers to the rest of the data that comes
+            #                    with it)
+            #udpFlowRate: UDP Flow rate
+            #udpFlows: Aggregate UDP Flows
+            #udpFlowsConcurrent: Concurrent UDP Flows
     #
     #        return [] if no results
     #--
