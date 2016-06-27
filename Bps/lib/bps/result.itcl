@@ -64,7 +64,9 @@ itcl::body bps::Result::interfaces {args} {
     foreach {name iface proto vlan} [split $namespec \0] break
     lappend ret $iface
   }
-  return [lsort -unique $ret]
+  set ret [lsort -unique $ret]
+  set idx [lsearch $ret -1]
+  return [lreplace $ret $idx $idx]
 }
 
 itcl::body bps::Result::protocols {args} {

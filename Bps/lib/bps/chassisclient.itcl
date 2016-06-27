@@ -779,7 +779,7 @@ itcl::body bps::ChassisClient::PS100G_FanOut {slot fanid} {
     }
 
     if {![string is integer -strict $fanid] || $fanid < 0 || $fanid > 2} {
-        error "Invalid fanid; must be an integer, 0(1x100G), 1(2x40G), 2(4x10G)."
+        error "Invalid fanid; must be an integer, 0(1x100G), 1(2x40G), 2(8x10G)."
     }
 
     _createCommand doc root setTheCardMode

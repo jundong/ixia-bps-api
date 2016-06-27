@@ -444,7 +444,7 @@ itcl::body bps::TestClient::lock {{value true}} {
 
 itcl::body bps::TestClient::resultId {} {
   if {![info exists _resultId]} {
-    error "No results available1"
+    error "No results available"
   }
   return [lindex [namespace inscope ::bps::BPSConnection _getTestResultId $_resultId] 0]
 }
@@ -488,7 +488,7 @@ itcl::body bps::TestClient::exportReport {args} {
   }
 
   if {![info exists _resultId]} {
-    error "No results available2"
+    error "No results available"
   }
   
   $_bpsobj exportReport -file $opts(file) -channel $opts(channel) -format $opts(format) -testid [resultId] -iterations $opts(iterations) -sectionids $opts(sectionids)
@@ -507,7 +507,7 @@ itcl::body bps::TestClient::exportFlowStats {args} {
         error "-destdir must be specified"
     }
     if {![info exists _resultId]} {
-        error "No results available3"
+        error "No results available"
     }
     $_bpsobj exportFlowStats -testid [resultId] \
                              -destdir $opts(destdir) \

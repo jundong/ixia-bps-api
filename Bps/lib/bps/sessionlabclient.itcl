@@ -29,6 +29,8 @@ itcl::class bps::SessionLabClient {
 #    retry_quanta = "..."
 #    resetConnectionsBetweenTests="true|false"
 #    steadyBehavior="cycle|hold|cycleRstClose|cycleRst"
+#    unlimitedDataRate="true|false"
+#    dataRate="..."
 #>
 #    <stepRate type="litera|percent" num="..." />
 #    <srcPortDist min="..." max="..."/>
@@ -55,6 +57,8 @@ itcl::body bps::SessionLabClient::constructor {
     retry_quanta 
     resetConnectionsBetweenTests
     steadyBehavior
+    unlimitedDataRate
+    dataRate
   } {
   	set _default($attr) [$control @$attr ""]
   }
@@ -111,6 +115,8 @@ itcl::body bps::SessionLabClient::_cget {option} {
     retries -
     retry_quanta  -
     resetConnectionsBetweenTests -
+    unlimitedDataRate -
+    dataRate -
     steadyBehavior {
       set control [$_xmlroot selectNodes //l4Control]
   	  return [$control @$option ""]
@@ -150,6 +156,8 @@ itcl::body bps::SessionLabClient::_doConfigChange {args} {
         retry_quanta 
         resetConnectionsBetweenTests
         steadyBehavior
+        unlimitedDataRate
+        dataRate
     } $option] != -1} {
       $control setAttribute $option $value
     } elseif {[lsearch {

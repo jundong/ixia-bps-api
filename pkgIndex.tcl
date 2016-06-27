@@ -20,6 +20,7 @@ if {$::tcl_platform(platform) != "unix"} {
         return
     }
 }
-lappend auto_path $dir/Bps/lib
+#lappend auto_path $dir/Bps/-bps/lib
+#lappend auto_path $dir/Bps/lib
 package ifneeded IxiaBps 1.0 [list source [file join $dir IxiaBpsTester.tcl]]
 

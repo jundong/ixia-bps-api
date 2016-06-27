@@ -65,6 +65,15 @@ set profile [ @tester getAppProfile $newAppProfile ]
     -delayStart 00:00:05 \
     -loadprofile $newLoadProfileName
 
+@tester configureComponent $testNewName $componentName -rampDist.up 00:00:10 \
+    -rampDist.upBehavior full \
+    -rampDist.steady 00:01:55 \
+    -rampDist.steadyBehavior cycle \
+    -rampDist.down 00:00:05 \
+    -rampDist.downBehavior full \
+    -delayStart 00:00:55 \
+    -loadprofile $newLoadProfileName
+
 @tester save $testNewName -force
 
 #@tester importTest Import1 -file C:/Tmp/Bps/import.bpt -force

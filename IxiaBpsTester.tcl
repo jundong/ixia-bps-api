@@ -47,7 +47,7 @@ namespace eval IXIA {
         protected variable _superflows
         protected variable _tests
         protected variable _testSeries
-        protected variable _strikeLists
+        protected variable _strikeList
   
         constructor { host userid password args } {
             set tag "Tester::constructor $host $userid $password $args [info script]"
@@ -78,13 +78,16 @@ namespace eval IXIA {
         public method createAppProfile { name args } {}
         public method createSuperflow { name args } {}
         public method createComponent { testName componentName componentType args } {}
+        public method createStrikeList { name args } {}
         
         public method configure { name args } {}
         public method configurePhase { name action index args } {}
+        public method configureComponent { testName componentName args } {}
         public method configureNetwork { name action type parameters args } {}
         public method configureSuperflow { name action type parameters args } {}
         public method configureAppProfile { appProfileName superFlowName action args } {}
         public method configurePort { slot port args } {}
+        public method configureStrikeList { name action args } {}
         
         public method listElementOptions { networkName type id } {
             set args ""
@@ -110,8 +113,14 @@ namespace eval IXIA {
         public method exportTest { name args } {}
         public method exportReport { name args } {}
         
-        public method startCapture {} { $_connection startPacketTrace }
-        public method stopCapture {} { $_connection stopPacketTrace }
+        public method startCapture { name } {
+            set test [getObjByName $name]
+            $test  startPacketTrace
+        }
+        public method stopCapture { name } {
+            set test [getObjByName $name]
+            $test  stopPacketTrace
+        }
         public method exportCapture { portlist dir direction args } {}
         
         public method getRtStats { name args } {}
@@ -121,7 +130,7 @@ namespace eval IXIA {
             if { [ info exists IXIA::rtProcess($name) ] } {
                 return $IXIA::rtProcess($name)
             }
-            return [ list ]
+            return null
         }
         
         public method reservePort { portlist args } {}
@@ -216,6 +225,37 @@ namespace eval IXIA {
             }
             return $networkHandle
         }
+        
+        public method getObjByName { name } {
+            set tag "body Tester::getObjByName $name[info script]"
+            Deputs "----- TAG: $tag -----"
+            
+            if { ![ info exists name ] } {
+                error "getObjByName name must be configured"
+            }
+            
+            set handle ""
+            if { [ catch {
+                if { [ info exists _tests($name) ] } {
+                    set handle $_tests($name)
+                } elseif { [ info exists _testSeries($name) ] } {
+                    set handle $_testSeries($name)
+                } elseif { [ info exists _networks($name) ] } {
+                    set handle $_networks($name)
+                } elseif { [ info exists _loadProfiles($name) ] } {
+                    set handle $_loadProfiles($name)
+                } elseif { [ info exists _components($name) ] } {
+                    set handle $_components($name)
+                } elseif { [ info exists _strikeList($name) ] } {
+                    set handle $_strikeList($name)
+                } else {
+                    error "No object found with $name"
+                }
+            } err ] } {
+                Deputs $err
+            }
+            return $handle
+        }
     }
 
     #--
@@ -288,6 +328,8 @@ namespace eval IXIA {
                 set handle $_loadProfiles($name)
             } elseif { [ info exists _components($name) ] } {
                 set handle $_components($name)
+            } elseif { [ info exists _strikeList($name) ] } {
+                set handle $_strikeList($name)
             }
             
             if { $handle != "" } {
@@ -299,6 +341,66 @@ namespace eval IXIA {
             }
         } err ] } {
             Deputs "----- Failed to configure object $name: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: configureComponent - Configure component object
+    #--
+    # Parameters:
+    #       testName: The name of test, mandatory parameter
+    #       componentName: The name of component, mandatory parameter
+    #       args:
+    #           ........
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::configureComponent { testName componentName args } {
+        set tag "body Tester::configureComponent $testName $componentName $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists testName ] } {
+            error "configureComponent testName must be configured"
+        }
+        
+        if { ![ info exists componentName ] } {
+            error "configureComponent componentName must be configured"
+        }
+        
+        set handle ""
+        if { [ catch {
+            if { [ info exists _tests($testName) ] } {
+                set handle $_tests($testName)
+            }
+            
+            if { $handle != "" } {
+                set component_handle ""
+                dict for { key value } [ $handle getComponents ] {
+                    if { $key != "aggstats" } {
+                        if { [ string tolower [ $value cget -name ] ] == [ string tolower $componentName ] ||
+                            [ string tolower [ $value cget -name ] ] == [ string tolower ::$componentName ]} {
+                            Deputs "$value"
+                            set component_handle $value
+                            set _components($componentName) "$value"
+                            break
+                        }
+                    }
+                }
+                if { $component_handle != "" } {
+                    set cmd "$component_handle configure $args"
+                    Deputs $cmd
+                    eval $cmd
+                } else {
+                    error "No component object found with name: $componentName"
+                }
+            } else {
+                error "No test object found with name: $testName"
+            }
+        } err ] } {
+            Deputs "----- Failed to configure $componentName: $err -----"
             return [GetErrorReturnHeader $err]
         }
         return [GetStandardReturnHeader]
@@ -564,8 +666,17 @@ namespace eval IXIA {
                         set cmd "$handle add $type $args"
                     }
                 } elseif { [ string tolower $action ] == "config" } {
-                    set element [ $handle get $type [ lindex $parameters 0 ] ]
-                    set cmd "$element configure $args"
+                    foreach res $parameters {
+                        set element [ $handle get $type $res ]
+                        set cmd "$element configure $args"
+                        
+                        Deputs $cmd
+                        eval $cmd
+                        
+                        set cmd "$handle commit"
+                        Deputs $cmd
+                        eval $cmd
+                    }
                 } elseif { [ string tolower $action ] == "remove" } {
                     if { [ string tolower $type ] == "path" } {
                         set cmd "$handle removePath [ lindex $parameters 0 ] [ lindex $parameters 1 ]"
@@ -695,6 +806,8 @@ namespace eval IXIA {
                 set handle $_networks($name)
             } elseif { [ info exists _appProfiles($name) ] } {
                 set handle $_appProfiles($name)
+            } elseif { [ info exists _strikeList($name) ] } {
+                set handle $_strikeList($name)
             }
             
             if { $handle != "" } {
@@ -753,6 +866,9 @@ namespace eval IXIA {
             } elseif { [ info exists _superflows($name) ] } {
                 set cmd "$_connection deleteSuperflow $name $args"
                 unset _superflows($name)
+            } elseif { [ info exists _strikeList($name) ] } {
+                set cmd "$_connection deleteStrikeList $name $args"
+                unset _strikeList($name)
             }
             
             if { $cmd != "" } {
@@ -844,6 +960,103 @@ namespace eval IXIA {
             }
         } err ] } {
             Deputs "----- Failed to create network neihorhood $name: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: createStrikeList - Create Strike List
+    #--
+    # Parameters:
+    #       name: The name of strike list to create, mandatory parameter
+    #       args:
+    #           ........
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::createStrikeList { name args } {
+        set tag "body Tester::createStrikeList $name $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists name ] } {
+            error "createStrikeList name must be configured"
+        }
+        
+        if { [ catch {
+            if { ![ info exists _strikeList($name) ] } {
+                set cmd "$_connection createStrikeList -name $name $args"
+                Deputs $cmd
+                set _strikeList($name) [ eval $cmd ]
+                
+                set cmd "$_strikeList($name) configure -name $name"
+                Deputs $cmd
+                eval $cmd
+            } else {
+                Deputs "Strike list $name has already exists"
+            }
+        } err ] } {
+            Deputs "----- Failed to create Strike List $name: $err -----"
+            return [GetErrorReturnHeader $err]
+        }
+        return [GetStandardReturnHeader]
+    }
+    
+    #--
+    # Name: configureStrikeList - Configure Strike List
+    #--
+    # Parameters:
+    #       name: The name of network, mandatory parameter
+    #       action: The action for strike list resources, valid values are config, add and remove, mandatory parameter
+    #       args: Args for action operation
+    #           For add:
+    #               
+    #           For remove:
+    #
+    #           For config:
+    # Return:
+    #        0 if got success
+    #        raise error if failed
+    #--
+    body Tester::configureStrikeList { name action args } {
+        set tag "body Tester::configureStrikeList $name $action $args [info script]"
+        Deputs "----- TAG: $tag -----"
+        
+        if { ![ info exists name ] } {
+            error "configureStrikeList name must be configured"
+        }
+        
+        if { ![ info exists action ] } {
+            error "configureStrikeList action must be configured"
+        }
+
+        if { [ catch {
+            if { [ info exists _strikeList($name) ] } {
+                set handle $_strikeList($name)
+                set cmd ""
+                if { [ string tolower $action ] == "add" } {
+                    set cmd "$handle add $args"
+                } elseif { [ string tolower $action ] == "config" } {
+                    set cmd "$handle configure $args"
+                } elseif { [ string tolower $action ] == "remove" } {
+                    set cmd "$handle remove $args"
+                } else {
+                    Deputs "Unknown action $action"
+                }
+                
+                Deputs $cmd
+                eval $cmd
+                
+                #set cmd "$handle save -force"
+                #Deputs $cmd
+                #eval $cmd
+            } else {
+                Deputs "No strike list $name found"
+                error "No strike list $name found"
+            }
+        } err ] } {
+            Deputs "----- Failed to configure strike list $name: $err -----"
             return [GetErrorReturnHeader $err]
         }
         return [GetStandardReturnHeader]
@@ -993,6 +1206,10 @@ namespace eval IXIA {
         
         if { ![ info exists dir ] } {
             error "exportCapture dir must be configured"
+        } else {
+            if { ![file exists $dir ] } {
+                file mkdir $dir
+            }
         }
         
         if { ![ info exists direction ] } {
@@ -1095,9 +1312,9 @@ namespace eval IXIA {
             Deputs $cmd
             eval $cmd
             
-            set cmd "createTest $name -template $name"
-            Deputs $cmd
-            eval $cmd
+            #set cmd "createTest $name -template $name"
+            #Deputs $cmd
+            #eval $cmd
         } err ] } {
             Deputs "----- Failed to export $name: $err -----"
             return [GetErrorReturnHeader $err]

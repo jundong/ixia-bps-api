@@ -10,6 +10,10 @@ package require multipart
 
 package require tls
 package require http
+## See CR1356582:  This allows external TCL shell to login
+##                 now that SSLv3 is disabled
+tls::init -tls1 true -ssl2 false -ssl3 false
+
 http::register https 443 [list ::tls::socket -request false]
 
 namespace eval bps {
@@ -193,6 +197,9 @@ itcl::class bps::BPSConnection {
   public method updateUser {id args}
   public method updateProfile {args}
   public method setL2DataRate {{igoreipg true}}
+  
+  #implementing method to determine the authentication mode being used
+  public method getAuthMode {}
 
   public method _getId {} { return [incr _nextid] }
 
@@ -1312,7 +1319,24 @@ itcl::body bps::BPSConnection::iluGetLicenses {server} {
 	set licenses [_execXml [$doc asXML]]
 	dom parse $licenses doc
 	$doc documentElement root
-	puts [$root asXML]
+	#puts [$root asXML]
+	set ret {}
+	foreach child [$root childNodes] {
+		set activationId [$child getAttribute activationId]
+		set product [$child getAttribute product]
+		set description [$child getAttribute description]
+		set licenseExpiry [$child getAttribute licenseExpiry]
+		set quantity [$child getAttribute quantity]
+		set maintenenanceExpiry [$child getAttribute maintenenanceExpiry]
+		lappend ret [list \
+			    $activationId \
+			    $product \
+			    $description \
+			    $licenseExpiry \
+			    $quantity \
+			    $maintenenanceExpiry]
+	}
+	puts "{$ret}"
 	return
 }
 
@@ -1322,7 +1346,16 @@ itcl::body bps::BPSConnection::iluGetLicenseServers {} {
 	set licenseServers [_execXml [$doc asXML]]
 	dom parse $licenseServers doc
 	$doc documentElement root
-	puts [$root asXML]
+	#puts [$root asXML]
+	set ret {}
+	foreach child [$root childNodes] {
+		set id [$child getAttribute id]
+		set hostId [$child getAttribute hostId]
+		lappend ret [list \
+			    $id \
+			    $hostId]
+	}
+	puts "{$ret}"
 	return
 }
 
@@ -1357,7 +1390,9 @@ itcl::body bps::BPSConnection::iluGetHostId {server} {
 	set hostId [_execXml [$doc asXML]]
 	dom parse $hostId doc
 	$doc documentElement root
-	puts [$root asXML]
+	#puts [$root asXML]
+	set ret [$root selectNodes {string(/hostId/id)}]
+	puts "{$ret}"
 	return
 }
 
@@ -1394,7 +1429,8 @@ itcl::body bps::BPSConnection::iluLicSync {server} {
 	set licSync [_execXml [$doc asXML]]
 	dom parse $licSync doc
 	$doc documentElement root
-	puts [$root asXML]
+	#puts [$root asXML]
+    puts "Sync done"
 	return
 }
 
@@ -1405,7 +1441,40 @@ itcl::body bps::BPSConnection::iluGetFloatingStats {server} {
 	set floatingStats [_execXml [$doc asXML]]
 	dom parse $floatingStats doc
 	$doc documentElement root
-	puts [$root asXML]
+	#puts [$root asXML]
+	set ret {}
+	foreach child [$root childNodes] {
+		set name [$child getAttribute name]
+		set maintenanceUntil [$child getAttribute maintenanceUntil]
+		set borrowable [$child getAttribute borrowable]
+		set available [$child getAttribute available]
+		set nodelist [$child selectNodes licensedUsers]
+		set ret1 {}
+		foreach node $nodelist {
+			foreach node1 [$node childNodes] {
+				set userName [$node1 getAttribute userName]
+				set host [$node1 getAttribute host]
+				#set ip [$node1 getAttribute ip]
+				set countTaken [$node1 getAttribute countTaken]
+				set borrowed [$node1 getAttribute borrowed]
+				#set duration [$node1 getAttribute duration]
+				#set hoursUsed [$node1 getAttribute hoursUsed]
+				#set daysLeft [$node1 getAttribute daysLeft]
+				lappend ret1 [list \
+					    $userName \
+					    $host \
+					    $countTaken \
+					    $borrowed]
+			}
+		}
+		lappend ret [list \
+			    $name \
+			    $maintenanceUntil \
+			    $borrowable \
+			    $available \
+			    $ret1]
+	}
+	puts "{$ret}"
 	return
 }
 
@@ -1427,7 +1496,9 @@ itcl::body bps::BPSConnection::iluGetVersion {} {
 	set version [_execXml [$doc asXML]]
 	dom parse $version doc
 	$doc documentElement root
-	puts [$root asXML]
+	#puts [$root asXML]
+	set ret [$root selectNodes {string(/iluVersion/version)}]
+	puts "{$ret}"
 	return
 }
 
@@ -1578,7 +1649,7 @@ itcl::body bps::BPSConnection::getReportTable {testid args} {
         {title.arg \0 "section title"}
         {table.arg 1 "table index within section"}
         {offset.arg 0 "starting row offset"}
-        {limit.arg 2500 "number of rows returned (max of 2500)"}
+        {limit.arg \0 "number of rows returned (default all)"}
         {iterations.arg {} "comparison testids"}
     }
     array set opts [cmdline::getoptions args $optlist "getReportTable options"]
@@ -2694,6 +2765,14 @@ itcl::body bps::BPSConnection::userInfo {id} {
 }
 
 itcl::body bps::BPSConnection::addUser {id password name email {group user}} {
+  # disabling user management for TACACS+ authentication mode
+  # only allowed to add Users if authentication mode is LOCAL
+  set mode [getAuthMode]
+  if {$mode eq "TACACS+"} {
+        puts -nonewline "The authentication mode used for this connection is: "
+        puts $mode
+        return -code error "User Management is not allowed in this mode."
+  }
   dom createDocument addUser doc
   $doc documentElement root
   $root setAttribute id $id
@@ -2706,6 +2785,14 @@ itcl::body bps::BPSConnection::addUser {id password name email {group user}} {
 }
 
 itcl::body bps::BPSConnection::removeUser {id} {
+  # disabling user management for TACACS+ authentication mode
+  # only allowed to remove Users if authentication mode is LOCAL
+  set mode [getAuthMode]
+  if {$mode eq "TACACS+"} {
+        puts -nonewline "The authentication mode used for this connection is: "
+        puts $mode
+        return -code error "User Management is not allowed in this mode."
+  }
   dom createDocument removeUser doc
   $doc documentElement root
   $root setAttribute id $id
@@ -2714,6 +2801,14 @@ itcl::body bps::BPSConnection::removeUser {id} {
 }
 
 itcl::body bps::BPSConnection::updateUser {id args} {
+  # disabling user management for TACACS+ authentication mode
+  # only allowed to update Users if authentication mode is LOCAL
+  set mode [getAuthMode]
+  if {$mode eq "TACACS+"} {
+        puts -nonewline "The authentication mode used for this connection is: "
+        puts $mode
+        return -code error "User Management is not allowed in this mode."
+  }
   set optlist {
     {email.arg \0 "email address"}
     {name.arg  \0 "real name"}
@@ -2737,6 +2832,14 @@ itcl::body bps::BPSConnection::updateUser {id args} {
 }
 
 itcl::body bps::BPSConnection::updateProfile {args} {
+  # disabling user management for TACACS+ authentication mode
+  # only allowed to update Users if authentication mode is LOCAL
+  set mode [getAuthMode]
+  if {$mode eq "TACACS+"} {
+        puts -nonewline "The authentication mode used for this connection is: "
+        puts $mode
+        return -code error "User Management is not allowed in this mode."
+  }
   set optlist {
     {email.arg \0 "email address"}
     {name.arg  \0 "real name"}
@@ -3328,6 +3431,21 @@ proc bps::BPSConnection::_getTestResultId {xmlnode} {
     return [list \
       $type@$id@[$xmlnode @host ""]@[$xmlnode @name ""]@[$xmlnode @iteration ""] \
       $type $id [$xmlnode @name ""]]
+}
+
+itcl::body bps::BPSConnection::getAuthMode {} {
+	# First create our top-level document
+	set doc [dom createDocument getAuthMode]
+	set root [$doc documentElement]
+	# Create the commands to build up our XML document
+	set getAuthMode [_execXml [$doc asXML]]
+	dom parse $getAuthMode doc
+	$doc documentElement root
+    set XML [_execXml "<getAuthMode/>"]
+    set doc1 [dom parse $XML]
+    set root1 [$doc1 documentElement]
+    set node [$root1 selectNodes /authMode/authMode/text()]
+    return [$node nodeValue]
 }
 
 package provide bps::BPSConnection 0.1

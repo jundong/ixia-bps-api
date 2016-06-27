@@ -31,6 +31,7 @@ namespace eval IXIA {
     }
     
     proc cbTestProgress { name process } {
+        puts "cbTestProgress: $name, $process"
         set IXIA::rtProcess($name) $process
     }
     

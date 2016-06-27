@@ -402,10 +402,10 @@ itcl::body bps::SuperflowClient::getActionParameters {actionid} {
   $doc documentElement root
   set ret [_describeStruct [$root selectNodes settings] {}]
   if {[$root @id ""] == "expect"} {
-  		lappend ret -match1 {} -match1IsRE false -match1Type simple \
-  		            -match2 {} -match2IsRE false -match2Type simple \
-  		            -match3 {} -match3IsRE false -match3Type simple \
-  		            -nomatch.timeout {}
+  	for {set matCond 1} {$matCond <= 64} {incr matCond} {
+  		lappend ret -match${matCond} {} -match${matCond}IsRE false -match${matCond}Type simple 
+	}
+  	lappend ret -nomatch.timeout {}
   }
   if {[$root @id ""] == "goto"} {
   		lappend ret -actionId 1 -loop 1
@@ -433,7 +433,7 @@ itcl::body bps::SuperflowClient::getMatchActions {actionid match} {
 			error "Invalid actionid \"$actionid\""
 	}
 	if {![string is integer $match] && $match != "none"} {
-		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+		error "Invalid match \"$match\", must be 1, 2,..., 64, or none"
 	}
   set ret {}
   set i 0
@@ -463,7 +463,7 @@ itcl::body bps::SuperflowClient::addMatchAction {actionid match flowid source na
 			error "Invalid actionid \"$actionid\""
 	}
 	if {![string is integer $match] && $match != "none"} {
-		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+		error "Invalid match \"$match\", must be 1, 2, ..., 64, or none"
 	}
   if {$match == "" || $match == "none"} {
       set matchnode [$_xmlroot selectNodes actions/action\[@id='$actionid'\]/matchBlock/nomatch]
@@ -516,7 +516,7 @@ itcl::body bps::SuperflowClient::modifyMatchAction {actionid match subid args} {
 			error "Invalid actionid \"$actionid\""
 	}
 	if {![string is integer $match] && $match != "none"} {
-		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+		error "Invalid match \"$match\", must be 1, 2, ..., 64, or none"
 	}
 	if {![string is integer -strict $subid]} {
 			error "Invalid actionid \"$subid\""
@@ -584,7 +584,7 @@ itcl::body bps::SuperflowClient::removeMatchAction {actionid match subid} {
 			error "Invalid actionid \"$actionid\""
 	}
 	if {![string is integer $match] && $match != "none"} {
-		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+		error "Invalid match \"$match\", must be 1, 2, ...,64, or none"
 	}
 	if {![string is integer -strict $subid]} {
 			error "Invalid actionid \"$subid\""
@@ -622,7 +622,7 @@ itcl::body bps::SuperflowClient::getMatchActionParameters {actionid match subid}
 			error "Invalid actionid \"$actionid\""
 	}
 	if {![string is integer $match] && $match != "none"} {
-		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+		error "Invalid match \"$match\", must be 1, 2, ...,64, or none"
 	}
 	if {![string is integer -strict $subid]} {
 			error "Invalid actionid \"$subid\""
@@ -648,10 +648,10 @@ itcl::body bps::SuperflowClient::getMatchActionParameters {actionid match subid}
   $doc documentElement root
   set ret [_describeStruct [$root selectNodes settings] {}]
   if {[$root @id ""] == "expect"} {
-  		lappend ret -match1 {} -match1IsRE false -match1Type simple \
-  		            -match2 {} -match2IsRE false -match2Type simple \
-  		            -match3 {} -match3IsRE false -match3Type simple \
-  		            -nomatch.timeout {}
+	for {set matCond 1} {$matCond <= 64} {incr matCond} {
+		lappend ret -match${matCond} {} -match${matCond}IsRE false -match${matCond}Type simple 
+	}
+	lappend ret -nomatch.timeout {}
   }
   if {[$root @id ""] == "goto"} {
   		lappend ret -actionId 1 -loop 2
@@ -664,7 +664,7 @@ itcl::body bps::SuperflowClient::unsetMatchActionParameter {actionid match subid
 			error "Invalid actionid \"$actionid\""
 	}
 	if {![string is integer $match] && $match != "none"} {
-		error "Invalid match \"$match\", must be 1, 2, 3, or none"
+		error "Invalid match \"$match\", must be 1, 2,..., 64 or none"
 	}
 	if {![string is integer -strict $subid]} {
 			error "Invalid actionid \"$subid\""
@@ -843,7 +843,7 @@ itcl::body bps::SuperflowClient::_validateActionArgs {cmdroot
     if {![string match -* $key]} {
       error "Invalid option $key"
     }
-    switch -- $key {
+    switch -regexp -- $key {
       -newid {
         $cmdroot setAttribute [string range $key 1 end] $value
       }
@@ -868,9 +868,7 @@ itcl::body bps::SuperflowClient::_validateActionArgs {cmdroot
      					$matchnode setAttribute timeout $value
      			}
       }
-      -match1IsRE -
-      -match2IsRE -
-      -match3IsRE {
+      -match[0-9]+IsRE {
       		if {$actiontype != "expect"} {
       			# dont do anything special
             if {![string match -* $key]} {
@@ -885,7 +883,7 @@ itcl::body bps::SuperflowClient::_validateActionArgs {cmdroot
     						dom createDocument matchBlock mbdoc
     						$mbdoc documentElement mbnode
      				  }
-     				  while {[llength [$mbnode selectNodes match]] < 3} {
+     				  while {[llength [$mbnode selectNodes match]] < 64} {
      						$mbnode appendFromScript {
      								domNode::match {
      										domNode::pattern
@@ -897,9 +895,7 @@ itcl::body bps::SuperflowClient::_validateActionArgs {cmdroot
       				$matchnode setAttribute regex $value
       		}
       }
-      -match1Type -
-      -match2Type -
-      -match3Type {
+      -match[0-9]+Type {
       		if {$actiontype != "expect"} {
       			# dont do anything special
             if {![string match -* $key]} {
@@ -911,7 +907,7 @@ itcl::body bps::SuperflowClient::_validateActionArgs {cmdroot
     						dom createDocument matchBlock mbdoc
     						$mbdoc documentElement mbnode
      				  }
-     				  while {[llength [$mbnode selectNodes match]] < 3} {
+     				  while {[llength [$mbnode selectNodes match]] < 64} {
      						$mbnode appendFromScript {
      								domNode::match {
      										domNode::pattern
@@ -937,9 +933,7 @@ itcl::body bps::SuperflowClient::_validateActionArgs {cmdroot
       				$matchnode setAttribute regex $val
       		}
       }
-      -match1 -
-      -match2 -
-      -match3 {
+      -match[0-9]+ {
       		if {$actiontype != "expect"} {
       			# dont do anything special
             if {![string match -* $key]} {
@@ -951,7 +945,7 @@ itcl::body bps::SuperflowClient::_validateActionArgs {cmdroot
     						dom createDocument matchBlock mbdoc
     						$mbdoc documentElement mbnode
      				  }
-     				  while {[llength [$mbnode selectNodes match]] < 3} {
+     				  while {[llength [$mbnode selectNodes match]] < 64} {
      						$mbnode appendFromScript {
      								domNode::match {
      										domNode::pattern

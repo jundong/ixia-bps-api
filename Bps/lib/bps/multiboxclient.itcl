@@ -482,9 +482,25 @@ itcl::body bps::MultiBoxClient::_rtStats {domnode} {
   		if {$vals != ""} {
   				set vals [$vals asXML]
   		}
-  		while {[regexp {(\w+)='([^']*)' (.*$)} $vals junk var val vals]} {
-  			 dict set values $var $val
-  		}
+		
+  		if 0 {
+			# BUG1355554 
+			# the rtStats which were coming could not be split correctly because the last datapoint
+			# was followed by a <values> tag. Therefore while retrieving the stats, it was missing out the last datapoint
+			# changing behavior and making it similar like in case of other rtStats clients
+			# the change below is copied from testclient.itcl where it is reported to work correctly
+			# same thing might happen in case of multiboxclient.itcl as well. 
+			# if the reverse happens, and any problems arise, kindly revert this change back
+			while {[regexp {(\w+)='([^']*)' (.*$)} $vals junk var val vals]} {
+				dict set values $var $val
+			}
+		}
+		
+		foreach item [split $vals " "] {
+            if {[regexp {(\w+)='([^']*)'} $item junk var val]} {
+                 dict set values $var $val
+            }
+        }
 
   		_try $_execRTStats $values
   }

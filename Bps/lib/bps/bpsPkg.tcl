@@ -1,4 +1,4 @@
-set bpsh_version 235642
+set bpsh_version 262287
 
 package require bps::BPSConnection
 package require bps::Client
